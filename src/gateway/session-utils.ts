@@ -32,6 +32,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 
@@ -58,6 +59,23 @@ export type {
 
 const DERIVED_TITLE_MAX_LEN = 60;
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+const TITLE_UNTRUSTED_CONTEXT_LABELS = [
+  "Conversation info",
+  "Sender",
+  "Thread starter",
+  "Replied message",
+  "Forwarded message context",
+  "Chat history since last reply",
+] as const;
+const TITLE_UNTRUSTED_CONTEXT_BLOCK_RE = new RegExp(
+  `^(?:${TITLE_UNTRUSTED_CONTEXT_LABELS.map((label) => label.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")).join("|")})\\s+\\(untrusted[^)]*\\):\\s*\`\`\`[a-zA-Z0-9_-]*\\s*\\r?\\n[\\s\\S]*?\\r?\\n\`\`\`\\s*`,
+  "i",
+);
+const TITLE_UNTRUSTED_CONTEXT_FRAGMENT_RE = new RegExp(
+  `^(?:${TITLE_UNTRUSTED_CONTEXT_LABELS.map((label) => label.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")).join("|")})\\s+\\(untrusted[^)]*\\):?\\s*`,
+  "i",
+);
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -154,6 +172,25 @@ function truncateTitle(text: string, maxLen: number): string {
   return cut + "…";
 }
 
+function stripLeadingUntrustedContextBlocks(input: string): string {
+  let text = input;
+  for (let i = 0; i < 8; i += 1) {
+    const next = text.replace(TITLE_UNTRUSTED_CONTEXT_BLOCK_RE, "");
+    if (next === text) {
+      break;
+    }
+    text = next;
+  }
+  return text.replace(TITLE_UNTRUSTED_CONTEXT_FRAGMENT_RE, "");
+}
+
+function sanitizeFirstUserMessageForTitle(input: string): string {
+  const withoutUntrustedContext = stripLeadingUntrustedContextBlocks(input);
+  const withoutEnvelope = stripEnvelope(withoutUntrustedContext);
+  const withoutMessageIdHints = stripMessageIdHints(withoutEnvelope);
+  return withoutMessageIdHints.replace(/\s+/g, " ").trim();
+}
+
 export function deriveSessionTitle(
   entry: SessionEntry | undefined,
   firstUserMessage?: string | null,
@@ -171,8 +208,10 @@ export function deriveSessionTitle(
   }
 
   if (firstUserMessage?.trim()) {
-    const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
-    return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
+    const normalized = sanitizeFirstUserMessageForTitle(firstUserMessage);
+    if (normalized) {
+      return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
+    }
   }
 
   if (entry.sessionId) {

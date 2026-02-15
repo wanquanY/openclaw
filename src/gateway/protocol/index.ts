@@ -163,10 +163,20 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
+  type SessionFileAction,
+  SessionFileActionSchema,
+  type SessionFileKind,
+  SessionFileKindSchema,
+  type SessionFileRecord,
+  SessionFileRecordSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsFilesListParams,
+  SessionsFilesListParamsSchema,
+  type SessionsFilesListResult,
+  SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsPatchParams,
@@ -291,6 +301,9 @@ export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
 );
 export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
+);
+export const validateSessionsFilesListParams = ajv.compile<SessionsFilesListParams>(
+  SessionsFilesListParamsSchema,
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
@@ -436,6 +449,11 @@ export {
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
+  SessionFileActionSchema,
+  SessionFileKindSchema,
+  SessionFileRecordSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
   SessionsUsageParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
@@ -582,6 +600,11 @@ export type {
   SessionsResetParams,
   SessionsDeleteParams,
   SessionsCompactParams,
+  SessionFileAction,
+  SessionFileKind,
+  SessionFileRecord,
+  SessionsFilesListParams,
+  SessionsFilesListResult,
   SessionsUsageParams,
   CronJob,
   CronListParams,

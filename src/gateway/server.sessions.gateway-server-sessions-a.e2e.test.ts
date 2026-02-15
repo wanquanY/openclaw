@@ -146,6 +146,7 @@ describe("gateway server sessions", () => {
     expect((hello as unknown as { features?: { methods?: string[] } }).features?.methods).toEqual(
       expect.arrayContaining([
         "sessions.list",
+        "sessions.files.list",
         "sessions.preview",
         "sessions.patch",
         "sessions.reset",
@@ -389,6 +390,216 @@ describe("gateway server sessions", () => {
     );
 
     ws.close();
+  });
+
+  test("sessions.files.list returns transcript references and workspace-created artifacts", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-files-"));
+    const storePath = path.join(dir, "sessions.json");
+    const workspaceDir = path.join(dir, "workspace");
+    const reportsDir = path.join(workspaceDir, "reports");
+    const exportsDir = path.join(workspaceDir, "exports");
+    await fs.mkdir(reportsDir, { recursive: true });
+    await fs.mkdir(exportsDir, { recursive: true });
+    testState.sessionStorePath = storePath;
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true, workspace: workspaceDir }],
+    };
+
+    const now = Date.now();
+    const sessionId = "sess-files";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const transcriptLines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        timestamp: now - 5_000,
+        message: {
+          role: "assistant",
+          timestamp: now - 5_000,
+          content: [
+            {
+              type: "toolCall",
+              id: "call-write-1",
+              name: "write",
+              arguments: { path: "reports/generated.xlsx", content: "binary" },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: now - 4_000,
+        message: {
+          role: "toolResult",
+          timestamp: now - 4_000,
+          toolCallId: "call-write-1",
+          toolName: "write",
+          isError: false,
+          content: [{ type: "text", text: "wrote reports/generated.xlsx" }],
+        },
+      }),
+    ];
+    await fs.writeFile(transcriptPath, transcriptLines.join("\n"), "utf-8");
+
+    await fs.writeFile(path.join(reportsDir, "generated.xlsx"), "excel-by-write-tool", "utf-8");
+    await fs.writeFile(path.join(exportsDir, "auto.xlsx"), "excel-by-exec-or-runtime", "utf-8");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId,
+          updatedAt: now,
+        },
+      },
+    });
+
+    const prevWorkspaceScan = process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN;
+    process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN = "1";
+    const { ws } = await openClient();
+    try {
+      const listed = await rpcReq<{
+        key: string;
+        status?: string;
+        workspaceDir?: string;
+        transcriptPath?: string;
+        files: Array<{
+          path: string;
+          workspacePath?: string;
+          action?: string;
+          actions?: string[];
+        }>;
+      }>(ws, "sessions.files.list", {
+        key: "main",
+        scope: "all",
+        includeMissing: false,
+        limit: 200,
+      });
+
+      expect(listed.ok).toBe(true);
+      expect(listed.payload?.key).toBe("agent:main:main");
+      expect(listed.payload?.status).toBe("ok");
+      expect(listed.payload?.workspaceDir).toBe(path.resolve(workspaceDir));
+      expect(listed.payload?.transcriptPath).toBe(transcriptPath);
+      const normalizedPaths = (listed.payload?.files ?? []).map((file) =>
+        (file.workspacePath ?? file.path).replaceAll("\\", "/"),
+      );
+      expect(normalizedPaths).toEqual(
+        expect.arrayContaining(["reports/generated.xlsx", "exports/auto.xlsx"]),
+      );
+      const generatedEntry = (listed.payload?.files ?? []).find(
+        (file) =>
+          (file.workspacePath ?? file.path).replaceAll("\\", "/") === "reports/generated.xlsx",
+      );
+      expect(generatedEntry?.actions ?? [generatedEntry?.action ?? ""]).toEqual(
+        expect.arrayContaining(["updated"]),
+      );
+    } finally {
+      ws.close();
+      if (prevWorkspaceScan === undefined) {
+        delete process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN;
+      } else {
+        process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN = prevWorkspaceScan;
+      }
+    }
+  });
+
+  test("sessions.files.list prefers transcript-derived exec outputs and ignores env noise by default", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-files-exec-"));
+    const storePath = path.join(dir, "sessions.json");
+    const workspaceDir = path.join(dir, "workspace");
+    const venvBinDir = path.join(workspaceDir, ".venv/bin");
+    await fs.mkdir(venvBinDir, { recursive: true });
+    testState.sessionStorePath = storePath;
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true, workspace: workspaceDir }],
+    };
+
+    const now = Date.now();
+    const sessionId = "sess-files-exec";
+    const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+    const transcriptLines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        timestamp: now - 3_000,
+        message: {
+          role: "assistant",
+          timestamp: now - 3_000,
+          content: [
+            {
+              type: "toolCall",
+              id: "call-exec-1",
+              name: "exec",
+              arguments: {
+                command:
+                  "python3 -m venv .venv && source .venv/bin/activate && python3 -c \"open('test_data.xlsx','wb').write(b'xlsx')\"",
+                workdir: workspaceDir,
+              },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: now - 2_000,
+        message: {
+          role: "toolResult",
+          timestamp: now - 2_000,
+          toolCallId: "call-exec-1",
+          toolName: "exec",
+          details: { status: "completed", exitCode: 0 },
+          isError: false,
+          content: [{ type: "text", text: "created test_data.xlsx" }],
+        },
+      }),
+    ];
+    await fs.writeFile(transcriptPath, transcriptLines.join("\n"), "utf-8");
+    await fs.writeFile(path.join(venvBinDir, "activate"), "#!/bin/sh\n", "utf-8");
+    await fs.writeFile(path.join(workspaceDir, "test_data.xlsx"), "xlsx-binary", "utf-8");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId,
+          updatedAt: now,
+        },
+      },
+    });
+
+    const prevWorkspaceScan = process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN;
+    delete process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN;
+    const { ws } = await openClient();
+    try {
+      const listed = await rpcReq<{
+        files: Array<{
+          path: string;
+          workspacePath?: string;
+          action?: string;
+          actions?: string[];
+        }>;
+      }>(ws, "sessions.files.list", {
+        key: "main",
+        scope: "changed",
+        includeMissing: false,
+        limit: 200,
+      });
+      expect(listed.ok).toBe(true);
+      const normalizedPaths = (listed.payload?.files ?? []).map((file) =>
+        (file.workspacePath ?? file.path).replaceAll("\\", "/"),
+      );
+      expect(normalizedPaths).toContain("test_data.xlsx");
+      expect(normalizedPaths).not.toContain(".venv/bin/activate");
+      const target = (listed.payload?.files ?? []).find(
+        (file) => (file.workspacePath ?? file.path).replaceAll("\\", "/") === "test_data.xlsx",
+      );
+      const targetActions = target?.actions ?? [target?.action ?? ""];
+      expect(targetActions.some((action) => action === "created" || action === "updated")).toBe(
+        true,
+      );
+    } finally {
+      ws.close();
+      if (prevWorkspaceScan === undefined) {
+        delete process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN;
+      } else {
+        process.env.OPENCLAW_SESSION_FILES_WORKSPACE_SCAN = prevWorkspaceScan;
+      }
+    }
   });
 
   test("sessions.preview returns transcript previews", async () => {

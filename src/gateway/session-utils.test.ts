@@ -250,6 +250,33 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
   });
 
+  test("strips leading untrusted metadata block from first user message", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const firstUserMessage = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      "{",
+      '  "conversation_label": "Video Workflow"',
+      "}",
+      "```",
+      "",
+      "[2026-02-15 11:22] 请在工作空间创建一个 excel 文件",
+    ].join("\n");
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe("请在工作空间创建一个 excel 文件");
+  });
+
+  test("strips message_id hint lines from first user message", () => {
+    const entry = {
+      sessionId: "abc123",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const firstUserMessage = "[2026-02-15 11:22] [message_id: test-123]\n请生成日报";
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe("请生成日报");
+  });
+
   test("truncates long first user message to 60 chars with ellipsis", () => {
     const entry = {
       sessionId: "abc123",
@@ -282,6 +309,23 @@ describe("deriveSessionTitle", () => {
     } as SessionEntry;
     const result = deriveSessionTitle(entry);
     expect(result).toBe("abcd1234 (2024-03-15)");
+  });
+
+  test("falls back to sessionId when first user message is only untrusted metadata", () => {
+    const entry = {
+      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
+    } as SessionEntry;
+    const firstUserMessage = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      "{",
+      '  "conversation_label": "Video Workflow"',
+      "}",
+      "```",
+      "",
+    ].join("\n");
+    expect(deriveSessionTitle(entry, firstUserMessage)).toBe("abcd1234 (2024-03-15)");
   });
 
   test("falls back to sessionId prefix without date when updatedAt missing", () => {

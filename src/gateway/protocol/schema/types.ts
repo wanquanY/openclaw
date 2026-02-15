@@ -111,8 +111,13 @@ import type {
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import type {
+  SessionFileActionSchema,
+  SessionFileKindSchema,
+  SessionFileRecordSchema,
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
   SessionsPreviewParamsSchema,
@@ -166,6 +171,11 @@ export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
 export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
+export type SessionFileAction = Static<typeof SessionFileActionSchema>;
+export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFileRecord = Static<typeof SessionFileRecordSchema>;
+export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchema>;
+export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
 export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
 export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
 export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;

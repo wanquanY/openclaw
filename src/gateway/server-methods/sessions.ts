@@ -27,6 +27,7 @@ import {
   validateSessionsResetParams,
   validateSessionsResolveParams,
 } from "../protocol/index.js";
+import { listSessionFilesForGateway } from "../session-files.js";
 import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
@@ -136,6 +137,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cfg,
       storePath,
       store,
+      opts: p,
+    });
+    respond(true, result, undefined);
+  },
+  "sessions.files.list": ({ params, respond }) => {
+    if (!validateSessionsFilesListParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid sessions.files.list params: ${formatValidationErrors(validateSessionsFilesListParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params;
+    const key = String(p.key ?? "").trim();
+    if (!key) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
+      return;
+    }
+    const cfg = loadConfig();
+    const result = listSessionFilesForGateway({
+      cfg,
+      key,
       opts: p,
     });
     respond(true, result, undefined);
