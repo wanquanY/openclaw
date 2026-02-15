@@ -21,6 +21,7 @@ import {
   formatValidationErrors,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
+  validateSessionsFilesListParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
@@ -154,7 +155,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = typeof p.key === "string" ? p.key.trim() : "";
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
@@ -274,7 +275,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = typeof p.key === "string" ? p.key.trim() : "";
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
@@ -325,7 +326,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = typeof p.key === "string" ? p.key.trim() : "";
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
@@ -411,7 +412,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = typeof p.key === "string" ? p.key.trim() : "";
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
@@ -472,7 +473,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const key = String(p.key ?? "").trim();
+    const key = typeof p.key === "string" ? p.key.trim() : "";
     if (!key) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
       return;
