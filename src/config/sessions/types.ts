@@ -22,6 +22,15 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionHistorySegment = {
+  sessionId: string;
+  sessionFile?: string;
+  archivedFiles?: string[];
+  endedAt: number;
+};
+
+const MAX_SESSION_HISTORY_SEGMENTS = 64;
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -33,6 +42,7 @@ export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
+  historySegments?: SessionHistorySegment[];
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   systemSent?: boolean;
@@ -111,6 +121,85 @@ export function mergeSessionEntry(
     return { ...patch, sessionId, updatedAt };
   }
   return { ...existing, ...patch, sessionId, updatedAt };
+}
+
+function normalizeHistoryFilePath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeHistoryFileList(values: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) {
+    return undefined;
+  }
+  const deduped = Array.from(
+    new Set(
+      values
+        .map((value) => normalizeHistoryFilePath(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  return deduped.length > 0 ? deduped : undefined;
+}
+
+export function appendSessionHistorySegment(params: {
+  entry: SessionEntry;
+  sessionId?: string;
+  sessionFile?: string;
+  archivedFiles?: string[];
+  endedAt?: number;
+}): SessionEntry {
+  const sessionId = params.sessionId?.trim();
+  if (!sessionId) {
+    return params.entry;
+  }
+
+  const sessionFile = normalizeHistoryFilePath(params.sessionFile);
+  const archivedFiles = normalizeHistoryFileList(params.archivedFiles);
+  const endedAtRaw = params.endedAt;
+  const endedAt =
+    typeof endedAtRaw === "number" && Number.isFinite(endedAtRaw)
+      ? Math.floor(endedAtRaw)
+      : Date.now();
+
+  const nextSegment: SessionHistorySegment = {
+    sessionId,
+    sessionFile,
+    archivedFiles,
+    endedAt,
+  };
+
+  const segments = [...(params.entry.historySegments ?? [])];
+  const existingIndex = segments.findIndex(
+    (segment) =>
+      segment.sessionId === nextSegment.sessionId &&
+      (segment.sessionFile ?? "") === (nextSegment.sessionFile ?? ""),
+  );
+
+  if (existingIndex >= 0) {
+    const existing = segments[existingIndex];
+    const mergedArchived = normalizeHistoryFileList([
+      ...(existing.archivedFiles ?? []),
+      ...(nextSegment.archivedFiles ?? []),
+    ]);
+    const existingEndedAt =
+      typeof existing.endedAt === "number" && Number.isFinite(existing.endedAt)
+        ? existing.endedAt
+        : 0;
+    segments[existingIndex] = {
+      ...existing,
+      sessionFile: nextSegment.sessionFile ?? existing.sessionFile,
+      archivedFiles: mergedArchived,
+      endedAt: Math.max(existingEndedAt, nextSegment.endedAt),
+    };
+  } else {
+    segments.push(nextSegment);
+  }
+
+  return {
+    ...params.entry,
+    historySegments: segments.slice(-MAX_SESSION_HISTORY_SEGMENTS),
+  };
 }
 
 export function resolveFreshSessionTotalTokens(

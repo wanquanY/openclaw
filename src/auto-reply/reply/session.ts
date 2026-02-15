@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  appendSessionHistorySegment,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
   type GroupKeyResolution,
@@ -140,6 +141,7 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let previousSessionEntry: SessionEntry | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -200,7 +202,6 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -251,6 +252,11 @@ export async function initSessionState(params: {
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
     }
+  }
+
+  previousSessionEntry = isNewSession && entry ? { ...entry } : undefined;
+  if (previousSessionEntry?.sessionId === sessionId) {
+    previousSessionEntry = undefined;
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -350,6 +356,14 @@ export async function initSessionState(params: {
       ctx.MessageThreadId,
     );
   }
+  if (previousSessionEntry?.sessionId) {
+    sessionEntry = appendSessionHistorySegment({
+      entry: sessionEntry,
+      sessionId: previousSessionEntry.sessionId,
+      sessionFile: previousSessionEntry.sessionFile,
+      endedAt: now,
+    });
+  }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -383,13 +397,36 @@ export async function initSessionState(params: {
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
-    archiveSessionTranscripts({
+    const archived = archiveSessionTranscripts({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
     });
+    if (archived.length > 0) {
+      sessionEntry = appendSessionHistorySegment({
+        entry: sessionEntry,
+        sessionId: previousSessionEntry.sessionId,
+        sessionFile: previousSessionEntry.sessionFile,
+        archivedFiles: archived,
+        endedAt: now,
+      });
+      sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+      await updateSessionStore(storePath, (store) => {
+        const current = store[sessionKey];
+        if (!current || current.sessionId !== sessionEntry.sessionId) {
+          return;
+        }
+        store[sessionKey] = appendSessionHistorySegment({
+          entry: current,
+          sessionId: previousSessionEntry?.sessionId,
+          sessionFile: previousSessionEntry?.sessionFile,
+          archivedFiles: archived,
+          endedAt: now,
+        });
+      });
+    }
   }
 
   const sessionCtx: TemplateContext = {

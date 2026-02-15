@@ -372,11 +372,24 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: {
+        sessionId: string;
+        historySegments?: Array<{
+          sessionId?: string;
+          archivedFiles?: string[];
+        }>;
+      };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    const latestHistory = reset.payload?.entry.historySegments?.at(-1);
+    expect(latestHistory?.sessionId).toBe("sess-main");
+    expect(
+      (latestHistory?.archivedFiles ?? []).some((value) =>
+        value.includes("sess-main.jsonl.reset."),
+      ),
+    ).toBe(true);
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 

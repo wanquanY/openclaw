@@ -9,7 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, type SessionHistorySegment } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -232,6 +232,116 @@ function broadcastChatError(params: {
   params.context.agentRunSeq.delete(params.runId);
 }
 
+type SessionHistorySource = {
+  sessionId: string;
+  sessionFile?: string;
+  archivedFiles?: string[];
+};
+
+function normalizeHistoryFilePath(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeHistoryFileList(values: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) {
+    return undefined;
+  }
+  const deduped = Array.from(
+    new Set(
+      values
+        .map((value) => normalizeHistoryFilePath(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+  return deduped.length > 0 ? deduped : undefined;
+}
+
+function listSessionHistorySources(entry: {
+  sessionId?: string;
+  sessionFile?: string;
+  historySegments?: SessionHistorySegment[];
+}): SessionHistorySource[] {
+  const sources: SessionHistorySource[] = [];
+
+  for (const segment of entry.historySegments ?? []) {
+    const segmentId = segment?.sessionId?.trim();
+    if (!segmentId) {
+      continue;
+    }
+    sources.push({
+      sessionId: segmentId,
+      sessionFile: normalizeHistoryFilePath(segment.sessionFile),
+      archivedFiles: normalizeHistoryFileList(segment.archivedFiles),
+    });
+  }
+
+  const currentSessionId = entry.sessionId?.trim();
+  if (currentSessionId) {
+    sources.push({
+      sessionId: currentSessionId,
+      sessionFile: normalizeHistoryFilePath(entry.sessionFile),
+    });
+  }
+
+  const deduped: SessionHistorySource[] = [];
+  const seen = new Set<string>();
+  for (const source of sources) {
+    const archivedKey = (source.archivedFiles ?? []).join("|");
+    const key = `${source.sessionId}\t${source.sessionFile ?? ""}\t${archivedKey}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(source);
+  }
+
+  return deduped;
+}
+
+function readMessagesForHistorySource(
+  source: SessionHistorySource,
+  storePath: string | undefined,
+): unknown[] {
+  const fileCandidates = [
+    ...(source.archivedFiles ?? []),
+    ...(source.sessionFile ? [source.sessionFile] : []),
+  ];
+
+  for (const fileCandidate of fileCandidates) {
+    const messages = readSessionMessages(source.sessionId, storePath, fileCandidate);
+    if (messages.length > 0) {
+      return messages;
+    }
+    if (fileCandidate && fs.existsSync(fileCandidate)) {
+      return messages;
+    }
+  }
+
+  return readSessionMessages(source.sessionId, storePath, source.sessionFile);
+}
+
+function encodeChatHistoryCursor(offset: number): string {
+  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
+}
+
+function decodeChatHistoryCursor(before: string | undefined): number | null {
+  if (!before) {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(before, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded) as { offset?: unknown };
+    const offset = parsed?.offset;
+    if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
+      return null;
+    }
+    return offset;
+  } catch {
+    return null;
+  }
+}
+
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
     if (!validateChatHistoryParams(params)) {
@@ -245,21 +355,43 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
+    const { sessionKey, limit, before } = params as {
       sessionKey: string;
       limit?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
+    const sources = entry ? listSessionHistorySources(entry) : [];
     const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sources.length > 0
+        ? sources.flatMap((source) => readMessagesForHistorySource(source, storePath))
+        : [];
+
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const beforeOffset = decodeChatHistoryCursor(before);
+    if (before && beforeOffset == null) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid chat.history before"),
+      );
+      return;
+    }
+
+    const totalMessages = rawMessages.length;
+    const end =
+      beforeOffset != null ? Math.min(Math.max(beforeOffset, 0), totalMessages) : totalMessages;
+    const start = Math.max(0, end - max);
+    const sliced = rawMessages.slice(start, end);
     const sanitized = stripEnvelopeFromMessages(sliced);
     const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+    const hasMore = start > 0;
+    const nextBefore = hasMore ? encodeChatHistoryCursor(start) : undefined;
+
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -282,6 +414,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: capped,
+      hasMore,
+      nextBefore,
       thinkingLevel,
       verboseLevel,
     });

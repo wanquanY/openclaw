@@ -7,6 +7,7 @@ import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  appendSessionHistorySegment,
   loadSessionStore,
   snapshotSessionOrigin,
   resolveMainSessionKey,
@@ -363,11 +364,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       oldSessionId = entry?.sessionId;
       oldSessionFile = entry?.sessionFile;
       const now = Date.now();
-      const nextEntry: SessionEntry = {
+      let nextEntry: SessionEntry = {
         sessionId: randomUUID(),
         updatedAt: now,
         systemSent: false,
         abortedLastRun: false,
+        historySegments: entry?.historySegments,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
@@ -386,18 +388,50 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         totalTokens: 0,
         totalTokensFresh: true,
       };
+
+      if (oldSessionId && oldSessionId !== nextEntry.sessionId) {
+        nextEntry = appendSessionHistorySegment({
+          entry: nextEntry,
+          sessionId: oldSessionId,
+          sessionFile: oldSessionFile,
+          endedAt: now,
+        });
+      }
+
       store[primaryKey] = nextEntry;
       return nextEntry;
     });
+
     // Archive old transcript so it doesn't accumulate on disk (#14869).
-    archiveSessionTranscriptsForSession({
+    const archived = archiveSessionTranscriptsForSession({
       sessionId: oldSessionId,
       storePath,
       sessionFile: oldSessionFile,
       agentId: target.agentId,
       reason: "reset",
     });
-    respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
+
+    let responseEntry = next;
+    if (archived.length > 0 && oldSessionId) {
+      responseEntry = await updateSessionStore(storePath, (store) => {
+        const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
+        const current = store[primaryKey];
+        if (!current || current.sessionId !== next.sessionId) {
+          return current ?? responseEntry;
+        }
+        const merged = appendSessionHistorySegment({
+          entry: current,
+          sessionId: oldSessionId,
+          sessionFile: oldSessionFile,
+          archivedFiles: archived,
+          endedAt: Date.now(),
+        });
+        store[primaryKey] = merged;
+        return merged;
+      });
+    }
+
+    respond(true, { ok: true, key: target.canonicalKey, entry: responseEntry }, undefined);
   },
   "sessions.delete": async ({ params, respond }) => {
     if (!validateSessionsDeleteParams(params)) {

@@ -124,6 +124,110 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.history paginates across archived session segments", async () => {
+    const tempDirs: string[] = [];
+    const { server, ws } = await startServerWithClient();
+    try {
+      await connectOk(ws);
+
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      tempDirs.push(sessionDir);
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      const archivedFile = path.join(sessionDir, "sess-old.jsonl.reset.2026-02-15T12-00-00.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            sessionFile: path.join(sessionDir, "sess-main.jsonl"),
+            updatedAt: Date.now(),
+            historySegments: [
+              {
+                sessionId: "sess-old",
+                archivedFiles: [archivedFile],
+                endedAt: Date.now() - 1_000,
+              },
+            ],
+          },
+        },
+      });
+
+      const makeLines = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, index) =>
+          JSON.stringify({
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `${prefix}${index + 1}` }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ).join("\n");
+
+      await fs.writeFile(archivedFile, makeLines("o", 3), "utf-8");
+      await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), makeLines("c", 2), "utf-8");
+
+      const firstPage = await rpcReq<{
+        messages?: unknown[];
+        hasMore?: boolean;
+        nextBefore?: string;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+      });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(typeof firstPage.payload?.nextBefore).toBe("string");
+
+      const textOf = (message: unknown): string | undefined => {
+        if (!message || typeof message !== "object") {
+          return undefined;
+        }
+        const content = (message as { content?: unknown }).content;
+        if (!Array.isArray(content) || content.length === 0) {
+          return undefined;
+        }
+        const first = content[0];
+        if (!first || typeof first !== "object") {
+          return undefined;
+        }
+        const text = (first as { text?: unknown }).text;
+        return typeof text === "string" ? text : undefined;
+      };
+
+      expect((firstPage.payload?.messages ?? []).map(textOf)).toEqual(["c1", "c2"]);
+
+      const secondPage = await rpcReq<{
+        messages?: unknown[];
+        hasMore?: boolean;
+        nextBefore?: string;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        before: firstPage.payload?.nextBefore,
+      });
+      expect(secondPage.ok).toBe(true);
+      expect((secondPage.payload?.messages ?? []).map(textOf)).toEqual(["o2", "o3"]);
+      expect(secondPage.payload?.hasMore).toBe(true);
+
+      const thirdPage = await rpcReq<{
+        messages?: unknown[];
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        before: secondPage.payload?.nextBefore,
+      });
+      expect(thirdPage.ok).toBe(true);
+      expect((thirdPage.payload?.messages ?? []).map(textOf)).toEqual(["o1"]);
+      expect(thirdPage.payload?.hasMore).toBe(false);
+    } finally {
+      testState.sessionStorePath = undefined;
+      ws.close();
+      await server.close();
+      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    }
+  });
+
   test("smoke: supports abort and idempotent completion", async () => {
     const tempDirs: string[] = [];
     const { server, ws } = await startServerWithClient();
