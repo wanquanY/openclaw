@@ -45,6 +45,8 @@ export type SessionEntry = {
   historySegments?: SessionHistorySegment[];
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
+  /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
+  spawnDepth?: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   chatType?: SessionChatType;
