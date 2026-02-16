@@ -20,6 +20,7 @@ import {
   errorShape,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
+  validateSessionsFilesListParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
@@ -41,6 +42,7 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import { listSessionFilesForGateway } from "../session-files.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { assertValidParams } from "./validation.js";
@@ -151,6 +153,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cfg,
       storePath,
       store,
+      opts: p,
+    });
+    respond(true, result, undefined);
+  },
+  "sessions.files.list": ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const cfg = loadConfig();
+    const result = listSessionFilesForGateway({
+      cfg,
+      key,
       opts: p,
     });
     respond(true, result, undefined);

@@ -151,6 +151,24 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("broadcasts non-tool agent events with dropIfSlow enabled", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    handler({
+      runId: "run-thinking",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "partial reasoning" },
+    });
+
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcast.mock.calls[0]?.[0]).toBe("agent");
+    expect(broadcast.mock.calls[0]?.[2]).toEqual({ dropIfSlow: true });
+  });
+
   it("routes tool events only to registered recipients when verbose is enabled", () => {
     const { broadcast, broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
@@ -169,6 +187,7 @@ describe("agent event handler", () => {
 
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds.mock.calls[0]?.[3]).toEqual({ dropIfSlow: true });
     resetAgentRunContextForTest();
   });
 

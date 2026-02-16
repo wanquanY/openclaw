@@ -85,6 +85,82 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("streams thinking_delta events in realtime without waiting for message_end", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onReasoningStream = vi.fn();
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-thinking-delta",
+      onReasoningStream,
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      reasoningMode: "stream",
+    });
+
+    const partialMessage = {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "" }],
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: partialMessage });
+    emit({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: "Because",
+        partial: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Because" }],
+        },
+      },
+    });
+    emit({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        contentIndex: 0,
+        delta: " it helps",
+        partial: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Because it helps" }],
+        },
+      },
+    });
+    emit({
+      type: "message_update",
+      message: partialMessage,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Final answer",
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+
+    const streamedReasoning = onReasoningStream.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(streamedReasoning).toContain("Reasoning:\n_Because_");
+    expect(streamedReasoning.at(-1)).toBe("Reasoning:\n_Because it helps_");
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     ({ open, close }) => {

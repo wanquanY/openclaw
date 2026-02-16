@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -81,13 +82,70 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  const isTextEvent =
+    evtType === "text_delta" || evtType === "text_start" || evtType === "text_end";
+  const isThinkingEvent =
+    evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end";
 
-  if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
+  if (!isTextEvent && !isThinkingEvent) {
     return;
   }
 
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+
+  if (isThinkingEvent) {
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_thinking_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType,
+      delta,
+      content,
+    });
+
+    if (!ctx.state.streamReasoning) {
+      return;
+    }
+
+    const partialMessageRaw = assistantRecord?.partial;
+    const partialMessage =
+      partialMessageRaw && typeof partialMessageRaw === "object"
+        ? (partialMessageRaw as AssistantMessage)
+        : undefined;
+    const partialThinking =
+      partialMessage?.role === "assistant" ? extractAssistantThinking(partialMessage) : "";
+
+    if (partialThinking) {
+      ctx.state.thinkingStreamBuffer = partialThinking;
+      ctx.emitReasoningStream(partialThinking);
+      return;
+    }
+
+    if (evtType === "thinking_delta" && delta) {
+      ctx.state.thinkingStreamBuffer += delta;
+      ctx.emitReasoningStream(ctx.state.thinkingStreamBuffer);
+      return;
+    }
+
+    if (evtType === "thinking_end") {
+      let nextThinking = ctx.state.thinkingStreamBuffer;
+      if (content) {
+        if (!nextThinking || content.startsWith(nextThinking)) {
+          nextThinking = content;
+        } else if (!nextThinking.startsWith(content)) {
+          nextThinking += content;
+        }
+      }
+      ctx.state.thinkingStreamBuffer = nextThinking;
+      if (nextThinking) {
+        ctx.emitReasoningStream(nextThinking);
+      }
+    }
+
+    return;
+  }
 
   appendRawStream({
     ts: Date.now(),
@@ -385,6 +443,7 @@ export function handleMessageEnd(
 
   ctx.state.deltaBuffer = "";
   ctx.state.blockBuffer = "";
+  ctx.state.thinkingStreamBuffer = "";
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;
   ctx.state.blockState.final = false;
