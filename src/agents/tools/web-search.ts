@@ -20,11 +20,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "serper"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DEFAULT_SERPER_BASE_URL = "https://google.serper.dev";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -73,7 +74,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'. Serper supports 'pd', 'pw', 'pm', and 'py'.",
     }),
   ),
 });
@@ -101,6 +102,11 @@ type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type SerperConfig = {
+  apiKey?: string;
+  baseUrl?: string;
 };
 
 type PerplexityApiKeySource = "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -183,6 +189,19 @@ type PerplexitySearchResponse = {
     };
   }>;
   citations?: string[];
+};
+
+type SerperSearchResult = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  date?: string;
+};
+
+type SerperSearchResponse = {
+  organic?: SerperSearchResult[];
+  answerBox?: Record<string, unknown>;
+  knowledgeGraph?: Record<string, unknown>;
 };
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
@@ -288,7 +307,43 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
+function resolveSerperConfig(search?: WebSearchConfig): SerperConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const serper = "serper" in search ? search.serper : undefined;
+  if (!serper || typeof serper !== "object") {
+    return {};
+  }
+  return serper as SerperConfig;
+}
+
+function resolveSerperApiKey(serper?: SerperConfig): string | undefined {
+  const fromConfig = normalizeApiKey(serper?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.SERPER_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveSerperBaseUrl(serper?: SerperConfig): string {
+  const fromConfig =
+    serper && "baseUrl" in serper && typeof serper.baseUrl === "string"
+      ? serper.baseUrl.trim()
+      : "";
+  return fromConfig || DEFAULT_SERPER_BASE_URL;
+}
+
 function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+  if (provider === "serper") {
+    return {
+      error: "missing_serper_api_key",
+      message:
+        "web_search (serper) needs a Serper API key. Set SERPER_API_KEY in the Gateway environment, or configure tools.web.search.serper.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -333,6 +388,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
+  if (raw === "serper") {
+    return "serper";
+  }
   if (raw === "perplexity") {
     return "perplexity";
   }
@@ -358,7 +416,15 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "brave";
     }
-    // 2. Gemini
+    // 2. Serper
+    const serperConfig = resolveSerperConfig(search);
+    if (resolveSerperApiKey(serperConfig)) {
+      defaultRuntime.log(
+        'web_search: no provider configured, auto-detected "serper" from available API keys',
+      );
+      return "serper";
+    }
+    // 3. Gemini
     const geminiConfig = resolveGeminiConfig(search);
     if (resolveGeminiApiKey(geminiConfig)) {
       defaultRuntime.log(
@@ -366,7 +432,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "gemini";
     }
-    // 3. Kimi
+    // 4. Kimi
     const kimiConfig = resolveKimiConfig(search);
     if (resolveKimiApiKey(kimiConfig)) {
       defaultRuntime.log(
@@ -374,7 +440,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "kimi";
     }
-    // 4. Perplexity
+    // 5. Perplexity
     const perplexityConfig = resolvePerplexityConfig(search);
     const { apiKey: perplexityKey } = resolvePerplexityApiKey(perplexityConfig);
     if (perplexityKey) {
@@ -383,7 +449,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       );
       return "perplexity";
     }
-    // 5. Grok
+    // 6. Grok
     const grokConfig = resolveGrokConfig(search);
     if (resolveGrokApiKey(grokConfig)) {
       defaultRuntime.log(
@@ -752,6 +818,19 @@ function freshnessToPerplexityRecency(freshness: string | undefined): string | u
   return map[freshness] ?? undefined;
 }
 
+function freshnessToSerperTbs(freshness: string | undefined): string | undefined {
+  if (!freshness) {
+    return undefined;
+  }
+  const map: Record<string, string> = {
+    pd: "qdr:d",
+    pw: "qdr:w",
+    pm: "qdr:m",
+    py: "qdr:y",
+  };
+  return map[freshness] ?? undefined;
+}
+
 function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;
@@ -1040,17 +1119,20 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  serperBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : params.provider === "kimi"
-          ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : params.provider === "gemini"
-            ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
-            : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "grok"
+          ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+          : params.provider === "kimi"
+            ? `${params.provider}:${params.query}:${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
+            : params.provider === "gemini"
+              ? `${params.provider}:${params.query}:${params.geminiModel ?? DEFAULT_GEMINI_MODEL}`
+              : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.serperBaseUrl ?? DEFAULT_SERPER_BASE_URL}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1110,6 +1192,79 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "serper") {
+    const baseUrl = (params.serperBaseUrl ?? DEFAULT_SERPER_BASE_URL).trim().replace(/\/$/, "");
+    const endpoint = `${baseUrl}/search`;
+    const body: Record<string, unknown> = {
+      q: params.query,
+      num: params.count,
+    };
+
+    if (params.country) {
+      body.gl = params.country.toLowerCase();
+    }
+
+    const language = params.search_lang || params.ui_lang;
+    if (language) {
+      body.hl = language;
+    }
+
+    const tbs = freshnessToSerperTbs(params.freshness);
+    if (tbs) {
+      body.tbs = tbs;
+    }
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": params.apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    });
+
+    if (!res.ok) {
+      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+      const detail = detailResult.text;
+      throw new Error(`Serper API error (${res.status}): ${detail || res.statusText}`);
+    }
+
+    const data = (await res.json()) as SerperSearchResponse;
+    const results = Array.isArray(data.organic) ? data.organic : [];
+    const mapped = results.map((entry) => {
+      const description = entry.snippet ?? "";
+      const title = entry.title ?? "";
+      const url = entry.link ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url,
+        description: description ? wrapWebContent(description, "web_search") : "",
+        published: entry.date || undefined,
+        siteName: rawSiteName || undefined,
+      };
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+      answerBox: data.answerBox,
+      knowledgeGraph: data.knowledgeGraph,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -1250,17 +1405,20 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const serperConfig = resolveSerperConfig(search);
 
   const description =
-    provider === "perplexity"
-      ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : provider === "grok"
-        ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : provider === "kimi"
-          ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
-          : provider === "gemini"
-            ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+    provider === "serper"
+      ? "Search the web using Serper (Google Search API). Returns titles, URLs, and snippets for fast research."
+      : provider === "perplexity"
+        ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
+        : provider === "grok"
+          ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
+          : provider === "kimi"
+            ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
+            : provider === "gemini"
+              ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1275,11 +1433,13 @@ export function createWebSearchTool(options?: {
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : provider === "kimi"
-              ? resolveKimiApiKey(kimiConfig)
-              : provider === "gemini"
-                ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+            : provider === "serper"
+              ? resolveSerperApiKey(serperConfig)
+              : provider === "kimi"
+                ? resolveKimiApiKey(kimiConfig)
+                : provider === "gemini"
+                  ? resolveGeminiApiKey(geminiConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1292,10 +1452,16 @@ export function createWebSearchTool(options?: {
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
       const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave" && provider !== "perplexity") {
+      if (
+        rawFreshness &&
+        provider !== "brave" &&
+        provider !== "perplexity" &&
+        provider !== "serper"
+      ) {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave and Perplexity web_search providers.",
+          message:
+            "freshness is only supported by the Brave, Perplexity, and Serper web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1305,6 +1471,14 @@ export function createWebSearchTool(options?: {
           error: "invalid_freshness",
           message:
             "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+      if (provider === "serper" && freshness && !freshnessToSerperTbs(freshness)) {
+        return jsonResult({
+          error: "unsupported_freshness",
+          message:
+            "Serper only supports freshness values pd, pw, pm, py (date ranges are not supported).",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1330,6 +1504,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        serperBaseUrl: resolveSerperBaseUrl(serperConfig),
       });
       return jsonResult(result);
     },
@@ -1344,6 +1519,8 @@ export const __testing = {
   resolvePerplexityRequestModel,
   normalizeFreshness,
   freshnessToPerplexityRecency,
+  freshnessToSerperTbs,
+  resolveSerperApiKey,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,

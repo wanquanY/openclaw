@@ -9,6 +9,8 @@ const {
   resolvePerplexityRequestModel,
   normalizeFreshness,
   freshnessToPerplexityRecency,
+  freshnessToSerperTbs,
+  resolveSerperApiKey,
   resolveGrokApiKey,
   resolveGrokModel,
   resolveGrokInlineCitations,
@@ -125,6 +127,33 @@ describe("freshnessToPerplexityRecency", () => {
   it("returns undefined for undefined/empty input", () => {
     expect(freshnessToPerplexityRecency(undefined)).toBeUndefined();
     expect(freshnessToPerplexityRecency("")).toBeUndefined();
+  });
+});
+
+describe("freshnessToSerperTbs", () => {
+  it("maps freshness shortcuts to Serper tbs values", () => {
+    expect(freshnessToSerperTbs("pd")).toBe("qdr:d");
+    expect(freshnessToSerperTbs("pw")).toBe("qdr:w");
+    expect(freshnessToSerperTbs("pm")).toBe("qdr:m");
+    expect(freshnessToSerperTbs("py")).toBe("qdr:y");
+  });
+
+  it("returns undefined for unsupported values", () => {
+    expect(freshnessToSerperTbs("2024-01-01to2024-01-31")).toBeUndefined();
+    expect(freshnessToSerperTbs(undefined)).toBeUndefined();
+  });
+});
+
+describe("web_search serper config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveSerperApiKey({ apiKey: "serper-test-key" })).toBe("serper-test-key");
+  });
+
+  it("returns undefined when no apiKey is available", () => {
+    withEnv({ SERPER_API_KEY: undefined }, () => {
+      expect(resolveSerperApiKey({})).toBeUndefined();
+      expect(resolveSerperApiKey(undefined)).toBeUndefined();
+    });
   });
 });
 

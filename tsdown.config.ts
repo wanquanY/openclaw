@@ -1,10 +1,8 @@
-import { defineConfig } from "tsdown";
-
 const env = {
   NODE_ENV: "production",
 };
 
-export default defineConfig([
+export default [
   {
     entry: "src/index.ts",
     env,
@@ -56,4 +54,4 @@ export default defineConfig([
     fixedExtension: false,
     platform: "node",
   },
-]);
+];

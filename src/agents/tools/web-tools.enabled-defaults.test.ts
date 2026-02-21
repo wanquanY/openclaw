@@ -45,6 +45,22 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
+function createSerperSearchTool(serperConfig?: { apiKey?: string; baseUrl?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "serper",
+            ...(serperConfig ? { serper: serperConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
   const requestBody = request?.body;
@@ -74,6 +90,26 @@ async function executePerplexitySearch(
     "call-1",
     options?.freshness ? { query, freshness: options.freshness } : { query },
   );
+  return mockFetch;
+}
+
+async function executeSerperSearch(
+  query: string,
+  options?: {
+    serperConfig?: { apiKey?: string; baseUrl?: string };
+    country?: string;
+    search_lang?: string;
+    count?: number;
+  },
+) {
+  const mockFetch = installMockFetch({ organic: [] });
+  const tool = createSerperSearchTool(options?.serperConfig);
+  await tool?.execute?.("call-1", {
+    query,
+    ...(options?.country ? { country: options.country } : {}),
+    ...(options?.search_lang ? { search_lang: options.search_lang } : {}),
+    ...(options?.count ? { count: options.count } : {}),
+  });
   return mockFetch;
 }
 
@@ -312,6 +348,43 @@ describe("web_search kimi provider", () => {
     expect(details.provider).toBe("kimi");
     expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
     expect(details.content).toContain("final answer");
+  });
+});
+
+describe("web_search serper provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("uses SERPER_API_KEY and posts to default Serper endpoint", async () => {
+    vi.stubEnv("SERPER_API_KEY", "serper-test");
+    const mockFetch = await executeSerperSearch("serper-query", {
+      country: "US",
+      search_lang: "en",
+      count: 7,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://google.serper.dev/search");
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = request?.headers as Record<string, string> | undefined;
+    expect(headers?.["X-API-KEY"]).toBe("serper-test");
+    const body = parseFirstRequestBody(mockFetch);
+    expect(body.q).toBe("serper-query");
+    expect(body.num).toBe(7);
+    expect(body.gl).toBe("us");
+    expect(body.hl).toBe("en");
+  });
+
+  it("respects configured Serper baseUrl", async () => {
+    const mockFetch = await executeSerperSearch("serper-custom-base", {
+      serperConfig: { apiKey: "serper-config", baseUrl: "https://example.com/serper" },
+    });
+    expect(mockFetch).toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://example.com/serper/search");
   });
 });
 
