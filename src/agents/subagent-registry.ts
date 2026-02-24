@@ -52,6 +52,8 @@ let listenerStop: (() => void) | null = null;
 // Use var to avoid TDZ when init runs across circular imports during bootstrap.
 var restoreAttempted = false;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
+const SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS = 25;
+const SUBAGENT_WAIT_IMMEDIATE_TIMEOUT_BACKOFF_EVERY = 4;
 const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 /**
@@ -862,63 +864,109 @@ export function registerSubagentRun(params: {
 async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
   try {
     const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-    const wait = await callGateway<{
-      status?: string;
-      startedAt?: number;
-      endedAt?: number;
-      error?: string;
-    }>({
-      method: "agent.wait",
-      params: {
+    let immediateObserverTimeoutCount = 0;
+    while (true) {
+      const latest = subagentRuns.get(runId);
+      if (!latest) {
+        return;
+      }
+      // Lifecycle listener already finalized this run.
+      if (typeof latest.endedAt === "number") {
+        if (suppressAnnounceForSteerRestart(latest)) {
+          return;
+        }
+        void startSubagentAnnounceCleanupFlow(runId, latest);
+        return;
+      }
+
+      const waitStartedAt = Date.now();
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
+        method: "agent.wait",
+        params: {
+          runId,
+          timeoutMs,
+        },
+        timeoutMs: timeoutMs + 10_000,
+      });
+      if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+        return;
+      }
+
+      const entry = subagentRuns.get(runId);
+      if (!entry) {
+        return;
+      }
+
+      // `agent.wait` also uses status=timeout for observer timeout (run still active).
+      // Treat timeout as terminal only when lifecycle timestamps are present.
+      const hasTerminalLifecycle =
+        typeof wait.startedAt === "number" || typeof wait.endedAt === "number";
+      if (wait.status === "timeout" && !hasTerminalLifecycle) {
+        // In production this long-poll usually blocks for `timeoutMs`. In tests
+        // (or edge failure paths) timeout can be returned immediately, so guard
+        // against tight spin loops.
+        const elapsedMs = Date.now() - waitStartedAt;
+        if (elapsedMs < SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS) {
+          immediateObserverTimeoutCount += 1;
+        } else {
+          immediateObserverTimeoutCount = 0;
+        }
+        if (
+          elapsedMs < SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS &&
+          immediateObserverTimeoutCount % SUBAGENT_WAIT_IMMEDIATE_TIMEOUT_BACKOFF_EVERY === 0
+        ) {
+          await new Promise<void>((resolve) =>
+            setTimeout(resolve, SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS - elapsedMs),
+          );
+        }
+        continue;
+      }
+      immediateObserverTimeoutCount = 0;
+
+      let mutated = false;
+      if (typeof wait.startedAt === "number") {
+        entry.startedAt = wait.startedAt;
+        mutated = true;
+      }
+      if (typeof wait.endedAt === "number") {
+        entry.endedAt = wait.endedAt;
+        mutated = true;
+      }
+      if (!entry.endedAt) {
+        entry.endedAt = Date.now();
+        mutated = true;
+      }
+      const waitError = typeof wait.error === "string" ? wait.error : undefined;
+      const outcome: SubagentRunOutcome =
+        wait.status === "error"
+          ? { status: "error", error: waitError }
+          : wait.status === "timeout"
+            ? { status: "timeout" }
+            : { status: "ok" };
+      if (!runOutcomesEqual(entry.outcome, outcome)) {
+        entry.outcome = outcome;
+        mutated = true;
+      }
+      if (mutated) {
+        persistSubagentRuns();
+      }
+      await completeSubagentRun({
         runId,
-        timeoutMs,
-      },
-      timeoutMs: timeoutMs + 10_000,
-    });
-    if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
+        endedAt: entry.endedAt,
+        outcome,
+        reason:
+          wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+      });
       return;
     }
-    const entry = subagentRuns.get(runId);
-    if (!entry) {
-      return;
-    }
-    let mutated = false;
-    if (typeof wait.startedAt === "number") {
-      entry.startedAt = wait.startedAt;
-      mutated = true;
-    }
-    if (typeof wait.endedAt === "number") {
-      entry.endedAt = wait.endedAt;
-      mutated = true;
-    }
-    if (!entry.endedAt) {
-      entry.endedAt = Date.now();
-      mutated = true;
-    }
-    const waitError = typeof wait.error === "string" ? wait.error : undefined;
-    const outcome: SubagentRunOutcome =
-      wait.status === "error"
-        ? { status: "error", error: waitError }
-        : wait.status === "timeout"
-          ? { status: "timeout" }
-          : { status: "ok" };
-    if (!runOutcomesEqual(entry.outcome, outcome)) {
-      entry.outcome = outcome;
-      mutated = true;
-    }
-    if (mutated) {
-      persistSubagentRuns();
-    }
-    await completeSubagentRun({
-      runId,
-      endedAt: entry.endedAt,
-      outcome,
-      reason:
-        wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    });
   } catch {
     // ignore
   }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
@@ -14,6 +14,7 @@ describe("startHeartbeatRunner", () => {
   }
 
   afterEach(() => {
+    setHeartbeatsEnabled(true);
     resetHeartbeatWakeStateForTests();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -197,6 +198,40 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
+      }),
+    );
+
+    runner.stop();
+  });
+
+  it("runs targeted exec-event wakes even when scheduled heartbeat agents are disabled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    setHeartbeatsEnabled(false);
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      sessionKey: "agent:main:webchat:dm:user-1",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "exec-event",
+        agentId: "main",
+        sessionKey: "agent:main:webchat:dm:user-1",
       }),
     );
 
