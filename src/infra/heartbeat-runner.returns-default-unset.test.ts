@@ -22,6 +22,7 @@ import {
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
+  setHeartbeatsEnabled,
 } from "./heartbeat-runner.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -493,6 +494,72 @@ describe("runHeartbeatOnce", () => {
     expect(res.status).toBe("skipped");
     if (res.status === "skipped") {
       expect(res.reason).toBe("disabled");
+    }
+  });
+
+  it("runs exec-event wake even when normal heartbeat gates are disabled", async () => {
+    const tmpDir = await createCaseDir("hb-exec-event-bypass");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "0m",
+              target: "whatsapp",
+            },
+          },
+          list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid-exec-event",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue({ text: "exec completed output" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "exec-msg-1",
+        toJid: "jid:+1555",
+      });
+
+      setHeartbeatsEnabled(false);
+      const res = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "exec-event",
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
+      });
+
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "exec completed output",
+        expect.any(Object),
+      );
+    } finally {
+      setHeartbeatsEnabled(true);
+      replySpy.mockRestore();
     }
   });
 
