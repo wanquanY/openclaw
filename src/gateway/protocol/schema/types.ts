@@ -118,9 +118,19 @@ import type {
 } from "./nodes.js";
 import type { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import type {
+  SessionFileMutationEventSchema,
+  SessionFileMutationOpSchema,
+  SessionFileActionSchema,
+  SessionFileKindSchema,
+  SessionFileRecordSchema,
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
+  SessionsFilesTrackParamsSchema,
+  SessionsFilesTrackResultSchema,
   SessionsListParamsSchema,
+  SessionsMemoryFlushParamsSchema,
   SessionsPatchParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
@@ -173,8 +183,18 @@ export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
+export type SessionsMemoryFlushParams = Static<typeof SessionsMemoryFlushParamsSchema>;
 export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
+export type SessionFileMutationOp = Static<typeof SessionFileMutationOpSchema>;
+export type SessionFileMutationEvent = Static<typeof SessionFileMutationEventSchema>;
+export type SessionFileAction = Static<typeof SessionFileActionSchema>;
+export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFileRecord = Static<typeof SessionFileRecordSchema>;
+export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchema>;
+export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
+export type SessionsFilesTrackParams = Static<typeof SessionsFilesTrackParamsSchema>;
+export type SessionsFilesTrackResult = Static<typeof SessionsFilesTrackResultSchema>;
 export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
 export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
 export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;

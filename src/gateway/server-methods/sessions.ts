@@ -14,6 +14,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
+import saveSessionToMemory from "../../hooks/bundled/session-memory/handler.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -26,12 +27,16 @@ import {
   errorShape,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
+  validateSessionsFilesListParams,
+  validateSessionsFilesTrackParams,
   validateSessionsListParams,
+  validateSessionsMemoryFlushParams,
   validateSessionsPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
 } from "../protocol/index.js";
+import { listSessionFilesForGateway, trackSessionFilesForGateway } from "../session-files.js";
 import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
@@ -218,6 +223,46 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     respond(true, result, undefined);
   },
+  "sessions.files.list": ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSessionsFilesListParams, "sessions.files.list", respond)
+    ) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const cfg = loadConfig();
+    const result = listSessionFilesForGateway({
+      cfg,
+      key,
+      opts: p,
+    });
+    respond(true, result, undefined);
+  },
+  "sessions.files.track": ({ params, respond }) => {
+    if (
+      !assertValidParams(params, validateSessionsFilesTrackParams, "sessions.files.track", respond)
+    ) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const cfg = loadConfig();
+    const result = trackSessionFilesForGateway({
+      cfg,
+      key,
+      opts: p,
+    });
+    respond(true, result, undefined);
+  },
   "sessions.preview": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
@@ -336,6 +381,71 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     };
     respond(true, result, undefined);
+  },
+  "sessions.memory.flush": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsMemoryFlushParams,
+        "sessions.memory.flush",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+
+    const { cfg, target } = resolveGatewaySessionTargetFromKey(key);
+    const { entry } = loadSessionEntry(key);
+    if (!entry?.sessionId) {
+      respond(true, { ok: true, key: target.canonicalKey ?? key, status: "missing" }, undefined);
+      return;
+    }
+
+    const eventContext: Record<string, unknown> = {
+      cfg,
+      sessionEntry: entry,
+      previousSessionEntry: entry,
+      commandSource: "gateway:sessions.memory.flush",
+      throwOnError: true,
+    };
+
+    try {
+      const hookEvent = createInternalHookEvent(
+        "command",
+        "new",
+        target.canonicalKey ?? key,
+        eventContext,
+      );
+      await saveSessionToMemory(hookEvent);
+      const details = hookEvent.context.sessionMemoryResult as
+        | { path?: string; filename?: string }
+        | undefined;
+      respond(
+        true,
+        {
+          ok: true,
+          key: target.canonicalKey ?? key,
+          status: "flushed",
+          memoryPath: typeof details?.path === "string" ? details.path : undefined,
+          memoryFile: typeof details?.filename === "string" ? details.filename : undefined,
+        },
+        undefined,
+      );
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `failed to flush session memory: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    }
   },
   "sessions.reset": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {

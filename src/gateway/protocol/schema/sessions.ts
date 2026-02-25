@@ -90,6 +90,13 @@ export const SessionsResetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsMemoryFlushParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -104,6 +111,101 @@ export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionFileActionSchema = Type.Union([
+  Type.Literal("created"),
+  Type.Literal("updated"),
+  Type.Literal("read"),
+  Type.Literal("deleted"),
+  Type.Literal("referenced"),
+]);
+
+export const SessionFileKindSchema = Type.Union([
+  Type.Literal("file"),
+  Type.Literal("directory"),
+  Type.Literal("unknown"),
+]);
+
+export const SessionsFilesListParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    scope: Type.Optional(
+      Type.Union([Type.Literal("created"), Type.Literal("changed"), Type.Literal("all")]),
+    ),
+    includeMissing: Type.Optional(Type.Boolean()),
+    includeSpawned: Type.Optional(Type.Boolean()),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionFileMutationOpSchema = Type.Union([
+  Type.Literal("rename"),
+  Type.Literal("delete"),
+]);
+
+export const SessionFileMutationEventSchema = Type.Object(
+  {
+    id: Type.Optional(NonEmptyString),
+    op: SessionFileMutationOpSchema,
+    path: NonEmptyString,
+    nextPath: Type.Optional(NonEmptyString),
+    ts: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsFilesTrackParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    events: Type.Array(SessionFileMutationEventSchema, {
+      minItems: 1,
+      maxItems: 200,
+    }),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionFileRecordSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    workspacePath: Type.Optional(Type.String()),
+    kind: Type.Optional(SessionFileKindSchema),
+    action: Type.Optional(SessionFileActionSchema),
+    actions: Type.Optional(Type.Array(SessionFileActionSchema)),
+    exists: Type.Optional(Type.Boolean()),
+    firstSeenAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastSeenAt: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsFilesListResultSchema = Type.Object(
+  {
+    ts: Type.Optional(Type.Integer({ minimum: 0 })),
+    key: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    status: Type.Optional(Type.String()),
+    workspaceDir: Type.Optional(Type.String()),
+    transcriptPath: Type.Optional(Type.String()),
+    count: Type.Optional(Type.Integer({ minimum: 0 })),
+    files: Type.Array(SessionFileRecordSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsFilesTrackResultSchema = Type.Object(
+  {
+    ts: Type.Optional(Type.Integer({ minimum: 0 })),
+    key: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    status: Type.Optional(Type.String()),
+    applied: Type.Integer({ minimum: 0 }),
+    ignored: Type.Integer({ minimum: 0 }),
+    logPath: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
