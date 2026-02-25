@@ -168,12 +168,32 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
+  type SessionFileMutationEvent,
+  SessionFileMutationEventSchema,
+  type SessionFileMutationOp,
+  SessionFileMutationOpSchema,
+  type SessionFileAction,
+  SessionFileActionSchema,
+  type SessionFileKind,
+  SessionFileKindSchema,
+  type SessionFileRecord,
+  SessionFileRecordSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsFilesListParams,
+  SessionsFilesListParamsSchema,
+  type SessionsFilesListResult,
+  SessionsFilesListResultSchema,
+  type SessionsFilesTrackParams,
+  SessionsFilesTrackParamsSchema,
+  type SessionsFilesTrackResult,
+  SessionsFilesTrackResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  type SessionsMemoryFlushParams,
+  SessionsMemoryFlushParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
   type SessionsPreviewParams,
@@ -295,11 +315,20 @@ export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
 export const validateSessionsResetParams =
   ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
+export const validateSessionsMemoryFlushParams = ajv.compile<SessionsMemoryFlushParams>(
+  SessionsMemoryFlushParamsSchema,
+);
 export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
   SessionsDeleteParamsSchema,
 );
 export const validateSessionsCompactParams = ajv.compile<SessionsCompactParams>(
   SessionsCompactParamsSchema,
+);
+export const validateSessionsFilesListParams = ajv.compile<SessionsFilesListParams>(
+  SessionsFilesListParamsSchema,
+);
+export const validateSessionsFilesTrackParams = ajv.compile<SessionsFilesTrackParams>(
+  SessionsFilesTrackParamsSchema,
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
@@ -449,8 +478,18 @@ export {
   SessionsPreviewParamsSchema,
   SessionsPatchParamsSchema,
   SessionsResetParamsSchema,
+  SessionsMemoryFlushParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
+  SessionFileMutationOpSchema,
+  SessionFileMutationEventSchema,
+  SessionFileActionSchema,
+  SessionFileKindSchema,
+  SessionFileRecordSchema,
+  SessionsFilesListParamsSchema,
+  SessionsFilesListResultSchema,
+  SessionsFilesTrackParamsSchema,
+  SessionsFilesTrackResultSchema,
   SessionsUsageParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
@@ -598,8 +637,18 @@ export type {
   SessionsPatchParams,
   SessionsPatchResult,
   SessionsResetParams,
+  SessionsMemoryFlushParams,
   SessionsDeleteParams,
   SessionsCompactParams,
+  SessionFileMutationOp,
+  SessionFileMutationEvent,
+  SessionFileAction,
+  SessionFileKind,
+  SessionFileRecord,
+  SessionsFilesListParams,
+  SessionsFilesListResult,
+  SessionsFilesTrackParams,
+  SessionsFilesTrackResult,
   SessionsUsageParams,
   CronJob,
   CronListParams,

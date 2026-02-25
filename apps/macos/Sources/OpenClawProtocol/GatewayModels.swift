@@ -1228,6 +1228,20 @@ public struct SessionsResetParams: Codable, Sendable {
     }
 }
 
+public struct SessionsMemoryFlushParams: Codable, Sendable {
+    public let key: String
+
+    public init(
+        key: String)
+    {
+        self.key = key
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
 public struct SessionsDeleteParams: Codable, Sendable {
     public let key: String
     public let deletetranscript: Bool?
@@ -1265,6 +1279,206 @@ public struct SessionsCompactParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case maxlines = "maxLines"
+    }
+}
+
+public struct SessionFileMutationEvent: Codable, Sendable {
+    public let id: String?
+    public let op: SessionFileMutationOp
+    public let path: String
+    public let nextpath: String?
+    public let ts: Int?
+
+    public init(
+        id: String?,
+        op: SessionFileMutationOp,
+        path: String,
+        nextpath: String?,
+        ts: Int?)
+    {
+        self.id = id
+        self.op = op
+        self.path = path
+        self.nextpath = nextpath
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case op
+        case path
+        case nextpath = "nextPath"
+        case ts
+    }
+}
+
+public struct SessionFileRecord: Codable, Sendable {
+    public let path: String
+    public let workspacepath: String?
+    public let kind: AnyCodable?
+    public let action: AnyCodable?
+    public let actions: [SessionFileAction]?
+    public let exists: Bool?
+    public let firstseenat: Int?
+    public let lastseenat: Int?
+
+    public init(
+        path: String,
+        workspacepath: String?,
+        kind: AnyCodable?,
+        action: AnyCodable?,
+        actions: [SessionFileAction]?,
+        exists: Bool?,
+        firstseenat: Int?,
+        lastseenat: Int?)
+    {
+        self.path = path
+        self.workspacepath = workspacepath
+        self.kind = kind
+        self.action = action
+        self.actions = actions
+        self.exists = exists
+        self.firstseenat = firstseenat
+        self.lastseenat = lastseenat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case workspacepath = "workspacePath"
+        case kind
+        case action
+        case actions
+        case exists
+        case firstseenat = "firstSeenAt"
+        case lastseenat = "lastSeenAt"
+    }
+}
+
+public struct SessionsFilesListParams: Codable, Sendable {
+    public let key: String
+    public let scope: AnyCodable?
+    public let includemissing: Bool?
+    public let includespawned: Bool?
+    public let limit: Int?
+
+    public init(
+        key: String,
+        scope: AnyCodable?,
+        includemissing: Bool?,
+        includespawned: Bool?,
+        limit: Int?)
+    {
+        self.key = key
+        self.scope = scope
+        self.includemissing = includemissing
+        self.includespawned = includespawned
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case scope
+        case includemissing = "includeMissing"
+        case includespawned = "includeSpawned"
+        case limit
+    }
+}
+
+public struct SessionsFilesListResult: Codable, Sendable {
+    public let ts: Int?
+    public let key: String
+    public let sessionid: String?
+    public let status: String?
+    public let workspacedir: String?
+    public let transcriptpath: String?
+    public let count: Int?
+    public let files: [SessionFileRecord]
+
+    public init(
+        ts: Int?,
+        key: String,
+        sessionid: String?,
+        status: String?,
+        workspacedir: String?,
+        transcriptpath: String?,
+        count: Int?,
+        files: [SessionFileRecord])
+    {
+        self.ts = ts
+        self.key = key
+        self.sessionid = sessionid
+        self.status = status
+        self.workspacedir = workspacedir
+        self.transcriptpath = transcriptpath
+        self.count = count
+        self.files = files
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ts
+        case key
+        case sessionid = "sessionId"
+        case status
+        case workspacedir = "workspaceDir"
+        case transcriptpath = "transcriptPath"
+        case count
+        case files
+    }
+}
+
+public struct SessionsFilesTrackParams: Codable, Sendable {
+    public let key: String
+    public let events: [SessionFileMutationEvent]
+
+    public init(
+        key: String,
+        events: [SessionFileMutationEvent])
+    {
+        self.key = key
+        self.events = events
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case events
+    }
+}
+
+public struct SessionsFilesTrackResult: Codable, Sendable {
+    public let ts: Int?
+    public let key: String
+    public let sessionid: String?
+    public let status: String?
+    public let applied: Int
+    public let ignored: Int
+    public let logpath: String?
+
+    public init(
+        ts: Int?,
+        key: String,
+        sessionid: String?,
+        status: String?,
+        applied: Int,
+        ignored: Int,
+        logpath: String?)
+    {
+        self.ts = ts
+        self.key = key
+        self.sessionid = sessionid
+        self.status = status
+        self.applied = applied
+        self.ignored = ignored
+        self.logpath = logpath
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ts
+        case key
+        case sessionid = "sessionId"
+        case status
+        case applied
+        case ignored
+        case logpath = "logPath"
     }
 }
 
