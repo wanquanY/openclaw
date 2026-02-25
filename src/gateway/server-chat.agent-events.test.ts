@@ -5,6 +5,7 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
   createChatRunState,
+  createSessionEventSubscriptionRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -47,6 +48,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const sessionEventSubscriptions = createSessionEventSubscriptionRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -57,6 +59,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      sessionEventSubscriptions,
     });
 
     return {
@@ -67,6 +70,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
+      sessionEventSubscriptions,
       handler,
     };
   }
@@ -267,6 +271,31 @@ describe("agent event handler", () => {
 
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    resetAgentRunContextForTest();
+  });
+
+  it("routes tool events to session subscribers even without per-run recipients", () => {
+    const { broadcastToConnIds, sessionEventSubscriptions, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-subscribed",
+    });
+
+    registerAgentRunContext("run-tool-session-sub", {
+      sessionKey: "session-subscribed",
+      verboseLevel: "on",
+    });
+    sessionEventSubscriptions.subscribe("conn-session", "session-subscribed", ["tool"]);
+
+    handler({
+      runId: "run-tool-session-sub",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-session" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const recipients = broadcastToConnIds.mock.calls[0]?.[2] as ReadonlySet<string> | undefined;
+    expect(recipients?.has("conn-session")).toBe(true);
     resetAgentRunContextForTest();
   });
 

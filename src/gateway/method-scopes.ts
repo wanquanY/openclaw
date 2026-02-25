@@ -72,6 +72,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.list",
     "node.describe",
     "chat.history",
+    "events.subscribe",
+    "events.unsubscribe",
     "config.get",
     "talk.config",
     "agents.files.list",

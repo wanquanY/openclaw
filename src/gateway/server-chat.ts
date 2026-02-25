@@ -176,6 +176,13 @@ export type ToolEventRecipientRegistry = {
   markFinal: (runId: string) => void;
 };
 
+export type SessionEventSubscriptionRegistry = {
+  subscribe: (connId: string, sessionKey: string, streams?: readonly string[]) => void;
+  unsubscribe: (connId: string, sessionKey: string, streams?: readonly string[]) => void;
+  getRecipients: (sessionKey: string, stream: string) => ReadonlySet<string> | undefined;
+  removeConn: (connId: string) => void;
+};
+
 type ToolRecipientEntry = {
   connIds: Set<string>;
   updatedAt: number;
@@ -243,6 +250,141 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   return { add, get, markFinal };
 }
 
+const SESSION_EVENT_WILDCARD_STREAM = "*";
+
+function normalizeSessionEventStreams(streams?: readonly string[]): string[] {
+  if (!Array.isArray(streams) || streams.length === 0) {
+    return [SESSION_EVENT_WILDCARD_STREAM];
+  }
+  const normalized = streams
+    .map((stream) => String(stream ?? "").trim())
+    .filter((stream) => stream.length > 0);
+  if (normalized.length === 0 || normalized.includes(SESSION_EVENT_WILDCARD_STREAM)) {
+    return [SESSION_EVENT_WILDCARD_STREAM];
+  }
+  return Array.from(new Set(normalized));
+}
+
+export function createSessionEventSubscriptionRegistry(): SessionEventSubscriptionRegistry {
+  const bySession = new Map<string, Map<string, Set<string>>>();
+  const byConn = new Map<string, Map<string, Set<string>>>();
+
+  const addSessionStreamBinding = (sessionKey: string, stream: string, connId: string) => {
+    let streams = bySession.get(sessionKey);
+    if (!streams) {
+      streams = new Map<string, Set<string>>();
+      bySession.set(sessionKey, streams);
+    }
+    let connIds = streams.get(stream);
+    if (!connIds) {
+      connIds = new Set<string>();
+      streams.set(stream, connIds);
+    }
+    connIds.add(connId);
+  };
+
+  const addConnSessionBinding = (connId: string, sessionKey: string, stream: string) => {
+    let sessions = byConn.get(connId);
+    if (!sessions) {
+      sessions = new Map<string, Set<string>>();
+      byConn.set(connId, sessions);
+    }
+    let streams = sessions.get(sessionKey);
+    if (!streams) {
+      streams = new Set<string>();
+      sessions.set(sessionKey, streams);
+    }
+    streams.add(stream);
+  };
+
+  const removeBinding = (connId: string, sessionKey: string, stream: string) => {
+    const sessionStreams = bySession.get(sessionKey);
+    const streamConnIds = sessionStreams?.get(stream);
+    streamConnIds?.delete(connId);
+    if (streamConnIds && streamConnIds.size === 0) {
+      sessionStreams?.delete(stream);
+    }
+    if (sessionStreams && sessionStreams.size === 0) {
+      bySession.delete(sessionKey);
+    }
+
+    const connSessions = byConn.get(connId);
+    const connStreams = connSessions?.get(sessionKey);
+    connStreams?.delete(stream);
+    if (connStreams && connStreams.size === 0) {
+      connSessions?.delete(sessionKey);
+    }
+    if (connSessions && connSessions.size === 0) {
+      byConn.delete(connId);
+    }
+  };
+
+  const subscribe = (connId: string, sessionKey: string, streams?: readonly string[]) => {
+    if (!connId || !sessionKey) {
+      return;
+    }
+    for (const stream of normalizeSessionEventStreams(streams)) {
+      addSessionStreamBinding(sessionKey, stream, connId);
+      addConnSessionBinding(connId, sessionKey, stream);
+    }
+  };
+
+  const unsubscribe = (connId: string, sessionKey: string, streams?: readonly string[]) => {
+    if (!connId || !sessionKey) {
+      return;
+    }
+    const connSessions = byConn.get(connId);
+    const boundStreams = connSessions?.get(sessionKey);
+    if (!boundStreams || boundStreams.size === 0) {
+      return;
+    }
+    const normalizedStreams = normalizeSessionEventStreams(streams);
+    const removeAll = normalizedStreams.includes(SESSION_EVENT_WILDCARD_STREAM);
+    const targets = removeAll ? Array.from(boundStreams) : normalizedStreams;
+    for (const stream of targets) {
+      removeBinding(connId, sessionKey, stream);
+    }
+  };
+
+  const getRecipients = (sessionKey: string, stream: string) => {
+    const sessionStreams = bySession.get(sessionKey);
+    if (!sessionStreams) {
+      return undefined;
+    }
+    const wildcardRecipients = sessionStreams.get(SESSION_EVENT_WILDCARD_STREAM);
+    const streamRecipients = sessionStreams.get(stream);
+    if (!wildcardRecipients && !streamRecipients) {
+      return undefined;
+    }
+    if (!wildcardRecipients) {
+      return streamRecipients;
+    }
+    if (!streamRecipients || wildcardRecipients === streamRecipients) {
+      return wildcardRecipients;
+    }
+    return new Set<string>([...wildcardRecipients, ...streamRecipients]);
+  };
+
+  const removeConn = (connId: string) => {
+    const sessions = byConn.get(connId);
+    if (!sessions) {
+      return;
+    }
+    for (const [sessionKey, streams] of sessions) {
+      for (const stream of streams) {
+        removeBinding(connId, sessionKey, stream);
+      }
+    }
+  };
+
+  return {
+    subscribe,
+    unsubscribe,
+    getRecipients,
+    removeConn,
+  };
+}
+
 export type ChatEventBroadcast = (
   event: string,
   payload: unknown,
@@ -265,6 +407,7 @@ export type AgentEventHandlerOptions = {
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
+  sessionEventSubscriptions?: SessionEventSubscriptionRegistry;
 };
 
 export function createAgentEventHandler({
@@ -276,7 +419,9 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
+  sessionEventSubscriptions,
 }: AgentEventHandlerOptions) {
+  const sessionSubscriptions = sessionEventSubscriptions;
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -418,17 +563,21 @@ export function createAgentEventHandler({
           })()
         : agentPayload;
     if (evt.seq !== last + 1) {
-      broadcast("agent", {
-        runId: eventRunId,
-        stream: "error",
-        ts: Date.now(),
-        sessionKey,
-        data: {
-          reason: "seq gap",
-          expected: last + 1,
-          received: evt.seq,
+      broadcast(
+        "agent",
+        {
+          runId: eventRunId,
+          stream: "error",
+          ts: Date.now(),
+          sessionKey,
+          data: {
+            reason: "seq gap",
+            expected: last + 1,
+            received: evt.seq,
+          },
         },
-      });
+        { dropIfSlow: true },
+      );
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
@@ -436,12 +585,26 @@ export function createAgentEventHandler({
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
       // messages to messaging surfaces (Telegram, Discord, etc.).
-      const recipients = toolEventRecipients.get(evt.runId);
-      if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
+      const recipients = new Set<string>();
+      const runRecipients = toolEventRecipients.get(evt.runId);
+      if (runRecipients && runRecipients.size > 0) {
+        for (const connId of runRecipients) {
+          recipients.add(connId);
+        }
+      }
+      if (sessionKey && sessionSubscriptions) {
+        const sessionRecipients = sessionSubscriptions.getRecipients(sessionKey, "tool");
+        if (sessionRecipients && sessionRecipients.size > 0) {
+          for (const connId of sessionRecipients) {
+            recipients.add(connId);
+          }
+        }
+      }
+      if (recipients.size > 0) {
+        broadcastToConnIds("agent", toolPayload, recipients, { dropIfSlow: true });
       }
     } else {
-      broadcast("agent", agentPayload);
+      broadcast("agent", agentPayload, { dropIfSlow: true });
     }
 
     const lifecyclePhase =

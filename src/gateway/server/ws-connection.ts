@@ -241,6 +241,10 @@ export function attachGatewayWsConnectionHandler(params: {
           context.nodeUnsubscribeAll(nodeId);
         }
       }
+      if (client) {
+        const context = buildRequestContext();
+        context.eventsUnsubscribeAllForConn?.(connId);
+      }
       logWs("out", "close", {
         connId,
         code,

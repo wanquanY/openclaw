@@ -61,6 +61,9 @@ export type GatewayRequestContext = {
     sessionKey?: string,
   ) => { sessionKey: string; clientRunId: string } | undefined;
   registerToolEventRecipient: (runId: string, connId: string) => void;
+  eventsSubscribe?: (connId: string, sessionKey: string, streams?: readonly string[]) => void;
+  eventsUnsubscribe?: (connId: string, sessionKey: string, streams?: readonly string[]) => void;
+  eventsUnsubscribeAllForConn?: (connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
   findRunningWizard: () => string | null;
