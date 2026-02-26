@@ -173,9 +173,51 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.state).toBe("delta");
+    expect(payload.delta).toBe("Hello world");
+    expect(payload.message?.id).toBe("chat-assistant:client-1");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("disables chat delta throttling when OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS=0", () => {
+    process.env.OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS = "0";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-throttle", {
+      sessionKey: "session-throttle",
+      clientRunId: "client-throttle",
+    });
+
+    handler({
+      runId: "run-throttle",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello" },
+    });
+    handler({
+      runId: "run-throttle",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      delta?: string;
+      message?: { id?: string; content?: Array<{ text?: string }> };
+    };
+    expect(secondPayload.state).toBe("delta");
+    expect(secondPayload.delta).toBe(" world");
+    expect(secondPayload.message?.id).toBe("chat-assistant:client-throttle");
+    expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
+
+    delete process.env.OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS;
+    nowSpy.mockRestore();
   });
 
   it("strips inline directives from assistant chat events", () => {
@@ -200,6 +242,34 @@ describe("agent event handler", () => {
     );
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits stable assistant message id in chat final payload", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 2_000 });
+    chatRunState.registry.add("run-final-id", {
+      sessionKey: "session-final-id",
+      clientRunId: "client-final-id",
+    });
+
+    handler({
+      runId: "run-final-id",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Done" },
+    });
+    emitLifecycleEnd(handler, "run-final-id");
+
+    const finalCall = chatBroadcastCalls(broadcast).find(
+      ([, payload]) => (payload as { state?: string })?.state === "final",
+    );
+    expect(finalCall).toBeDefined();
+    const payload = finalCall?.[1] as {
+      message?: { id?: string; content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.id).toBe("chat-assistant:client-final-id");
+    expect(payload.message?.content?.[0]?.text).toBe("Done");
     nowSpy?.mockRestore();
   });
 

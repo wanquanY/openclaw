@@ -410,6 +410,26 @@ export type AgentEventHandlerOptions = {
   sessionEventSubscriptions?: SessionEventSubscriptionRegistry;
 };
 
+const DEFAULT_CHAT_BRIDGE_DELTA_THROTTLE_MS = 150;
+
+function resolveChatBridgeDeltaThrottleMs(): number {
+  const raw =
+    process.env.OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS ??
+    process.env.OPENCLAW_CHAT_DELTA_THROTTLE_MS;
+  if (!raw || !raw.trim()) {
+    return DEFAULT_CHAT_BRIDGE_DELTA_THROTTLE_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CHAT_BRIDGE_DELTA_THROTTLE_MS;
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+function buildChatAssistantMessageId(clientRunId: string): string {
+  return `chat-assistant:${clientRunId}`;
+}
+
 export function createAgentEventHandler({
   broadcast,
   broadcastToConnIds,
@@ -422,6 +442,7 @@ export function createAgentEventHandler({
   sessionEventSubscriptions,
 }: AgentEventHandlerOptions) {
   const sessionSubscriptions = sessionEventSubscriptions;
+  const chatBridgeDeltaThrottleMs = resolveChatBridgeDeltaThrottleMs();
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
@@ -436,13 +457,27 @@ export function createAgentEventHandler({
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
+    const previousCleaned = chatRunState.buffers.get(clientRunId) ?? "";
     chatRunState.buffers.set(clientRunId, cleaned);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
+
+    let deltaText = cleaned;
+    if (previousCleaned) {
+      if (cleaned.startsWith(previousCleaned)) {
+        deltaText = cleaned.slice(previousCleaned.length);
+      } else if (previousCleaned.startsWith(cleaned)) {
+        deltaText = "";
+      }
+    }
+    if (!deltaText && cleaned === previousCleaned) {
+      return;
+    }
+
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    if (chatBridgeDeltaThrottleMs > 0 && now - last < chatBridgeDeltaThrottleMs) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -451,7 +486,9 @@ export function createAgentEventHandler({
       sessionKey,
       seq,
       state: "delta" as const,
+      delta: deltaText,
       message: {
+        id: buildChatAssistantMessageId(clientRunId),
         role: "assistant",
         content: [{ type: "text", text: cleaned }],
         timestamp: now,
@@ -491,6 +528,7 @@ export function createAgentEventHandler({
         message:
           text && !shouldSuppressSilent
             ? {
+                id: buildChatAssistantMessageId(clientRunId),
                 role: "assistant",
                 content: [{ type: "text", text }],
                 timestamp: Date.now(),
