@@ -60,6 +60,7 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
@@ -698,6 +699,11 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
+  const outboundSession = buildOutboundSessionContext({
+    cfg,
+    agentId,
+    sessionKey,
+  });
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
@@ -723,7 +729,7 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       threadId: delivery.threadId,
       payloads: [{ text: heartbeatOkText }],
-      agentId,
+      session: outboundSession,
       deps: opts.deps,
     });
     return true;
@@ -739,9 +745,16 @@ export async function runHeartbeatOnce(opts: {
 
     const heartbeatModelOverride = heartbeat?.model?.trim() || undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const bootstrapContextMode: "lightweight" | undefined =
+      heartbeat?.lightContext === true ? "lightweight" : undefined;
     const replyOpts = heartbeatModelOverride
-      ? { isHeartbeat: true, heartbeatModelOverride, suppressToolErrorWarnings }
-      : { isHeartbeat: true, suppressToolErrorWarnings };
+      ? {
+          isHeartbeat: true,
+          heartbeatModelOverride,
+          suppressToolErrorWarnings,
+          bootstrapContextMode,
+        }
+      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -916,7 +929,7 @@ export async function runHeartbeatOnce(opts: {
       channel: delivery.channel,
       to: delivery.to,
       accountId: deliveryAccountId,
-      agentId,
+      session: outboundSession,
       threadId: delivery.threadId,
       payloads: [
         ...reasoningPayloads,

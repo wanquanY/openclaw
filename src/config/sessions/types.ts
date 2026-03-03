@@ -52,6 +52,14 @@ export type SessionEntry = {
   previousSessions?: SessionPreviousSession[];
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Session-level stop cutoff captured when /stop is received.
+   * Messages at/before this boundary are skipped to avoid replaying
+   * queued pre-stop backlog.
+   */
+  abortCutoffMessageSid?: string;
+  /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
+  abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -123,6 +131,7 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  acp?: SessionAcpMeta;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
@@ -286,9 +295,21 @@ export function appendSessionPreviousSession(params: {
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
+  options?: MergeSessionEntryOptions,
+): number {
+  if (options?.policy === "preserve-activity" && existing) {
+    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+  }
+  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+}
+
+export function mergeSessionEntryWithPolicy(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+  options?: MergeSessionEntryOptions,
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
-  const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
+  const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
     const normalized = normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
     const previousSessions = normalizeSessionPreviousSessions(normalized.previousSessions);
@@ -318,6 +339,22 @@ export function mergeSessionEntry(
     delete normalized.previousSessions;
   }
   return normalized;
+}
+
+export function mergeSessionEntry(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  return mergeSessionEntryWithPolicy(existing, patch);
+}
+
+export function mergeSessionEntryPreserveActivity(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  return mergeSessionEntryWithPolicy(existing, patch, {
+    policy: "preserve-activity",
+  });
 }
 
 export function resolveFreshSessionTotalTokens(
