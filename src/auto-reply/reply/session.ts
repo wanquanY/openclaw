@@ -7,6 +7,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  appendSessionPreviousSession,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
   type GroupKeyResolution,
@@ -105,6 +106,21 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
+/**
+ * Default max parent token count beyond which thread/session parent forking is skipped.
+ * This prevents new thread sessions from inheriting near-full parent context.
+ * See #26905.
+ */
+const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+
+function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
+  const configured = cfg.session?.parentForkMaxTokens;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
+
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;
@@ -171,6 +187,7 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
+  const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
@@ -258,7 +275,7 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  let previousSessionEntry: SessionEntry | undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -313,6 +330,10 @@ export async function initSessionState(params: {
       persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
     }
+  }
+
+  if (isNewSession && entry?.sessionId && entry.sessionId !== sessionId) {
+    previousSessionEntry = { ...entry };
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -399,21 +420,33 @@ export async function initSessionState(params: {
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    log.warn(
-      `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-        `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
-    );
-    const forked = forkSessionFromParent({
-      parentEntry: sessionStore[parentSessionKey],
-      agentId,
-      sessionsDir: path.dirname(storePath),
-    });
-    if (forked) {
-      sessionId = forked.sessionId;
-      sessionEntry.sessionId = forked.sessionId;
-      sessionEntry.sessionFile = forked.sessionFile;
+    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
+      // Parent context is too large — forking would create a thread session
+      // that immediately overflows the model's context window. Start fresh
+      // instead and mark as forked to prevent re-attempts. See #26905.
+      log.warn(
+        `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+      );
       sessionEntry.forkedFromParent = true;
-      log.warn(`forked session created: file=${forked.sessionFile}`);
+    } else {
+      log.warn(
+        `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens}`,
+      );
+      const forked = forkSessionFromParent({
+        parentEntry: sessionStore[parentSessionKey],
+        agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      if (forked) {
+        sessionId = forked.sessionId;
+        sessionEntry.sessionId = forked.sessionId;
+        sessionEntry.sessionFile = forked.sessionFile;
+        sessionEntry.forkedFromParent = true;
+        log.warn(`forked session created: file=${forked.sessionFile}`);
+      }
     }
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
@@ -441,6 +474,17 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+  }
+  if (previousSessionEntry) {
+    const previousSessions = appendSessionPreviousSession({
+      previousEntry: previousSessionEntry,
+      existing: previousSessionEntry.previousSessions,
+    });
+    if (previousSessions) {
+      sessionEntry.previousSessions = previousSessions;
+    } else {
+      delete sessionEntry.previousSessions;
+    }
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };

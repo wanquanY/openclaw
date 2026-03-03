@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  normalizeSessionPreviousSessions,
+  type SessionEntry,
+} from "../config/sessions.js";
 import type {
   SessionFileAction,
   SessionFileKind,
@@ -52,6 +56,7 @@ const ACTION_ORDER: SessionFileAction[] = ["created", "updated", "deleted", "rea
 const SESSION_FILES_MUTATION_LOG_VERSION = 1;
 const SESSION_FILES_MUTATION_LOG_MAX_EVENTS = 4_000;
 const SESSION_FILES_MAX_SCOPED_SESSIONS = 200;
+const SESSION_FILES_MAX_HISTORY_SESSIONS = 64;
 
 type SessionFilesScope = "created" | "changed" | "all";
 
@@ -96,6 +101,12 @@ type SessionFilesMutationLog = {
   sessionId: string;
   updatedAt: number;
   events: SessionFilesMutationEvent[];
+};
+
+type SessionSnapshot = {
+  sessionId: string;
+  sessionFile?: string;
+  updatedAt?: number;
 };
 
 function isWorkspaceScanEnabled(): boolean {
@@ -1155,6 +1166,49 @@ function resolveSessionEntryForKey(params: { cfg: OpenClawConfig; key: string })
   };
 }
 
+function resolveSessionSnapshotsFromEntry(params: {
+  entry?: SessionEntry;
+  includeHistory: boolean;
+}): SessionSnapshot[] {
+  const entry = params.entry;
+  if (!entry?.sessionId) {
+    return [];
+  }
+  const snapshots: SessionSnapshot[] = [
+    {
+      sessionId: entry.sessionId,
+      sessionFile: entry.sessionFile,
+      updatedAt: entry.updatedAt,
+    },
+  ];
+  if (!params.includeHistory) {
+    return snapshots;
+  }
+  const previousSessions =
+    normalizeSessionPreviousSessions(entry.previousSessions, SESSION_FILES_MAX_HISTORY_SESSIONS) ??
+    [];
+  if (previousSessions.length === 0) {
+    return snapshots;
+  }
+  const seen = new Set<string>([entry.sessionId]);
+  for (const prev of previousSessions) {
+    const previousSessionId = String(prev.sessionId || "").trim();
+    if (!previousSessionId || seen.has(previousSessionId)) {
+      continue;
+    }
+    seen.add(previousSessionId);
+    snapshots.push({
+      sessionId: previousSessionId,
+      sessionFile: typeof prev.sessionFile === "string" ? prev.sessionFile : undefined,
+      updatedAt: typeof prev.updatedAt === "number" ? prev.updatedAt : undefined,
+    });
+    if (snapshots.length >= SESSION_FILES_MAX_HISTORY_SESSIONS) {
+      break;
+    }
+  }
+  return snapshots;
+}
+
 function resolveWorkspaceDirForAgent(cfg: OpenClawConfig, agentId: string): string | undefined {
   try {
     return path.resolve(resolveAgentWorkspaceDir(cfg, agentId));
@@ -1231,6 +1285,7 @@ function collectSpawnedDescendantSessionKeys(params: {
 function collectSessionFilesMapForResolvedEntry(params: {
   cfg: OpenClawConfig;
   resolved: ReturnType<typeof resolveSessionEntryForKey>;
+  snapshot?: SessionSnapshot;
 }): {
   workspaceDir?: string;
   transcriptPath?: string;
@@ -1239,18 +1294,33 @@ function collectSessionFilesMapForResolvedEntry(params: {
   const workspaceDir = resolveWorkspaceDirForAgent(params.cfg, params.resolved.agentId);
   const map = new Map<string, MutableSessionFile>();
   const statCache = new Map<string, fs.Stats | null>();
+  const snapshot = params.snapshot;
+  const resolvedEntry = params.resolved.entry;
+  const snapshotSessionId = String(snapshot?.sessionId || "").trim();
+  const targetSessionId = snapshotSessionId || resolvedEntry?.sessionId;
 
-  if (!params.resolved.entry?.sessionId) {
+  if (!targetSessionId) {
     return {
       workspaceDir,
       map,
     };
   }
+  const targetSessionFile = snapshot?.sessionFile;
+  const targetUpdatedAt = snapshot?.updatedAt;
+  const targetEntryForWindow: SessionEntry = {
+    ...(resolvedEntry ?? {
+      sessionId: targetSessionId,
+      updatedAt: targetUpdatedAt ?? Date.now(),
+    }),
+    sessionId: targetSessionId,
+    ...(targetSessionFile ? { sessionFile: targetSessionFile } : {}),
+    ...(targetUpdatedAt !== undefined ? { updatedAt: targetUpdatedAt } : {}),
+  };
 
   const transcriptPath = resolveSessionTranscriptCandidates(
-    params.resolved.entry.sessionId,
+    targetSessionId,
     params.resolved.storePath,
-    params.resolved.entry.sessionFile,
+    targetSessionFile,
     params.resolved.agentId,
   ).find((candidate) => fs.existsSync(candidate));
 
@@ -1270,7 +1340,7 @@ function collectSessionFilesMapForResolvedEntry(params: {
     applyWorkspaceMtimeScan({
       workspaceDir,
       window: resolveSessionTimeWindow({
-        entry: params.resolved.entry,
+        entry: targetEntryForWindow,
         transcriptPath,
         transcriptWindow,
       }),
@@ -1280,14 +1350,14 @@ function collectSessionFilesMapForResolvedEntry(params: {
   }
 
   const mutationLogPath = resolveSessionFilesMutationLogPath({
-    sessionId: params.resolved.entry.sessionId,
+    sessionId: targetSessionId,
     storePath: params.resolved.storePath,
   });
   const legacyMutationLogPath = resolveLegacySessionFilesMutationLogPath(transcriptPath);
   const mutationLog = readSessionFilesMutationLog({
     logPath: mutationLogPath,
     key: params.resolved.canonicalKey,
-    sessionId: params.resolved.entry.sessionId,
+    sessionId: targetSessionId,
   });
   const mergedMutationLog =
     legacyMutationLogPath && legacyMutationLogPath !== mutationLogPath
@@ -1296,7 +1366,7 @@ function collectSessionFilesMapForResolvedEntry(params: {
           secondary: readSessionFilesMutationLog({
             logPath: legacyMutationLogPath,
             key: params.resolved.canonicalKey,
-            sessionId: params.resolved.entry.sessionId,
+            sessionId: targetSessionId,
           }),
         })
       : mutationLog;
@@ -1720,6 +1790,7 @@ export function listSessionFilesForGateway(params: {
 }): SessionsFilesListResult {
   const key = params.key.trim();
   const includeMissing = params.opts.includeMissing === true;
+  const includeHistory = params.opts.includeHistory !== false;
   const includeSpawned = params.opts.includeSpawned === true;
   const scope = normalizeScope(params.opts.scope);
   const limit =
@@ -1730,26 +1801,46 @@ export function listSessionFilesForGateway(params: {
     cfg: params.cfg,
     key,
   });
-  const rootFiles = collectSessionFilesMapForResolvedEntry({
-    cfg: params.cfg,
-    resolved,
-  });
+  const workspaceDir = resolveWorkspaceDirForAgent(params.cfg, resolved.agentId);
 
   if (!resolved.entry?.sessionId) {
     return {
       ts: Date.now(),
       key: resolved.canonicalKey,
       status: "missing",
-      workspaceDir: rootFiles.workspaceDir,
+      workspaceDir,
       files: [],
       count: 0,
     };
   }
 
+  const rootSnapshots = resolveSessionSnapshotsFromEntry({
+    entry: resolved.entry,
+    includeHistory,
+  });
   const scopedMap = new Map<string, MutableSessionFile>();
-  let hasAnyTranscript = Boolean(rootFiles.transcriptPath);
-  for (const [entryKey, record] of rootFiles.map.entries()) {
-    scopedMap.set(entryKey, cloneMutableSessionFile(record));
+  let hasAnyTranscript = false;
+  let rootTranscriptPath: string | undefined;
+  for (const snapshot of rootSnapshots) {
+    const rootFiles = collectSessionFilesMapForResolvedEntry({
+      cfg: params.cfg,
+      resolved,
+      snapshot,
+    });
+    if (!rootTranscriptPath && rootFiles.transcriptPath) {
+      rootTranscriptPath = rootFiles.transcriptPath;
+    }
+    if (rootFiles.transcriptPath) {
+      hasAnyTranscript = true;
+    }
+    for (const [entryKey, record] of rootFiles.map.entries()) {
+      const existing = scopedMap.get(entryKey);
+      if (!existing) {
+        scopedMap.set(entryKey, cloneMutableSessionFile(record));
+        continue;
+      }
+      scopedMap.set(entryKey, mergeMutableSessionFile(existing, cloneMutableSessionFile(record)));
+    }
   }
 
   if (includeSpawned) {
@@ -1765,20 +1856,30 @@ export function listSessionFilesForGateway(params: {
       if (!childResolved.entry?.sessionId) {
         continue;
       }
-      const childFiles = collectSessionFilesMapForResolvedEntry({
-        cfg: params.cfg,
-        resolved: childResolved,
+      const childSnapshots = resolveSessionSnapshotsFromEntry({
+        entry: childResolved.entry,
+        includeHistory,
       });
-      if (childFiles.transcriptPath) {
-        hasAnyTranscript = true;
-      }
-      for (const [entryKey, record] of childFiles.map.entries()) {
-        const existing = scopedMap.get(entryKey);
-        if (!existing) {
-          scopedMap.set(entryKey, cloneMutableSessionFile(record));
-          continue;
+      for (const snapshot of childSnapshots) {
+        const childFiles = collectSessionFilesMapForResolvedEntry({
+          cfg: params.cfg,
+          resolved: childResolved,
+          snapshot,
+        });
+        if (childFiles.transcriptPath) {
+          hasAnyTranscript = true;
         }
-        scopedMap.set(entryKey, mergeMutableSessionFile(existing, cloneMutableSessionFile(record)));
+        for (const [entryKey, record] of childFiles.map.entries()) {
+          const existing = scopedMap.get(entryKey);
+          if (!existing) {
+            scopedMap.set(entryKey, cloneMutableSessionFile(record));
+            continue;
+          }
+          scopedMap.set(
+            entryKey,
+            mergeMutableSessionFile(existing, cloneMutableSessionFile(record)),
+          );
+        }
       }
     }
   }
@@ -1804,8 +1905,8 @@ export function listSessionFilesForGateway(params: {
     key: resolved.canonicalKey,
     sessionId: resolved.entry.sessionId,
     status,
-    workspaceDir: rootFiles.workspaceDir,
-    transcriptPath: rootFiles.transcriptPath,
+    workspaceDir,
+    transcriptPath: rootTranscriptPath,
     files,
     count: files.length,
   };

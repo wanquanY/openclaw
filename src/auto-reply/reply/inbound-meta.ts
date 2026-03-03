@@ -10,6 +10,13 @@ function safeTrim(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function isInternalWebchatContext(ctx: TemplateContext): boolean {
+  const originatingChannel = safeTrim(ctx.OriginatingChannel)?.toLowerCase();
+  const surface = safeTrim(ctx.Surface)?.toLowerCase();
+  const provider = safeTrim(ctx.Provider)?.toLowerCase();
+  return originatingChannel === "webchat" || surface === "webchat" || provider === "webchat";
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -63,16 +70,17 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+  const includeMessageIds = !isDirect || isInternalWebchatContext(ctx);
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const conversationInfo = {
-    message_id: isDirect ? undefined : messageId,
-    message_id_full: isDirect
-      ? undefined
-      : messageIdFull && messageIdFull !== messageId
+    message_id: includeMessageIds ? messageId : undefined,
+    message_id_full: includeMessageIds
+      ? messageIdFull && messageIdFull !== messageId
         ? messageIdFull
-        : undefined,
+        : undefined
+      : undefined,
     reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
     sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),

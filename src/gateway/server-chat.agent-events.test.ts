@@ -5,6 +5,7 @@ import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import {
   createAgentEventHandler,
   createChatRunState,
+  createSessionEventSubscriptionRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -47,6 +48,7 @@ describe("agent event handler", () => {
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
+    const sessionEventSubscriptions = createSessionEventSubscriptionRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -57,6 +59,7 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: params?.resolveSessionKeyForRun ?? (() => undefined),
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
+      sessionEventSubscriptions,
     });
 
     return {
@@ -67,6 +70,7 @@ describe("agent event handler", () => {
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
+      sessionEventSubscriptions,
       handler,
     };
   }
@@ -169,9 +173,51 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(payload.state).toBe("delta");
+    expect(payload.delta).toBe("Hello world");
+    expect(payload.message?.id).toBe("chat-assistant:client-1");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("disables chat delta throttling when OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS=0", () => {
+    process.env.OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS = "0";
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const { broadcast, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-throttle", {
+      sessionKey: "session-throttle",
+      clientRunId: "client-throttle",
+    });
+
+    handler({
+      runId: "run-throttle",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello" },
+    });
+    handler({
+      runId: "run-throttle",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Hello world" },
+    });
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const secondPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      delta?: string;
+      message?: { id?: string; content?: Array<{ text?: string }> };
+    };
+    expect(secondPayload.state).toBe("delta");
+    expect(secondPayload.delta).toBe(" world");
+    expect(secondPayload.message?.id).toBe("chat-assistant:client-throttle");
+    expect(secondPayload.message?.content?.[0]?.text).toBe("Hello world");
+
+    delete process.env.OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS;
+    nowSpy.mockRestore();
   });
 
   it("strips inline directives from assistant chat events", () => {
@@ -196,6 +242,34 @@ describe("agent event handler", () => {
     );
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits stable assistant message id in chat final payload", () => {
+    const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 2_000 });
+    chatRunState.registry.add("run-final-id", {
+      sessionKey: "session-final-id",
+      clientRunId: "client-final-id",
+    });
+
+    handler({
+      runId: "run-final-id",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Done" },
+    });
+    emitLifecycleEnd(handler, "run-final-id");
+
+    const finalCall = chatBroadcastCalls(broadcast).find(
+      ([, payload]) => (payload as { state?: string })?.state === "final",
+    );
+    expect(finalCall).toBeDefined();
+    const payload = finalCall?.[1] as {
+      message?: { id?: string; content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.id).toBe("chat-assistant:client-final-id");
+    expect(payload.message?.content?.[0]?.text).toBe("Done");
     nowSpy?.mockRestore();
   });
 
@@ -267,6 +341,31 @@ describe("agent event handler", () => {
 
     expect(broadcast).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    resetAgentRunContextForTest();
+  });
+
+  it("routes tool events to session subscribers even without per-run recipients", () => {
+    const { broadcastToConnIds, sessionEventSubscriptions, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-subscribed",
+    });
+
+    registerAgentRunContext("run-tool-session-sub", {
+      sessionKey: "session-subscribed",
+      verboseLevel: "on",
+    });
+    sessionEventSubscriptions.subscribe("conn-session", "session-subscribed", ["tool"]);
+
+    handler({
+      runId: "run-tool-session-sub",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      data: { phase: "start", name: "read", toolCallId: "t-session" },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const recipients = broadcastToConnIds.mock.calls[0]?.[2] as ReadonlySet<string> | undefined;
+    expect(recipients?.has("conn-session")).toBe(true);
     resetAgentRunContextForTest();
   });
 

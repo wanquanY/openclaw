@@ -7,6 +7,7 @@ import { stopSubagentsForRequester } from "../../auto-reply/reply/abort.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  appendSessionPreviousSession,
   loadSessionStore,
   snapshotSessionOrigin,
   resolveMainSessionKey,
@@ -497,6 +498,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         reasoningLevel: entry?.reasoningLevel,
         responseUsage: entry?.responseUsage,
         model: entry?.model,
+        modelProvider: entry?.modelProvider,
         contextTokens: entry?.contextTokens,
         sendPolicy: entry?.sendPolicy,
         label: entry?.label,
@@ -510,6 +512,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         totalTokens: 0,
         totalTokensFresh: true,
       };
+      const previousSessions = appendSessionPreviousSession({
+        previousEntry: entry,
+        existing: entry?.previousSessions,
+      });
+      if (previousSessions) {
+        nextEntry.previousSessions = previousSessions;
+      }
       store[primaryKey] = nextEntry;
       return nextEntry;
     });

@@ -1,8 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   injectHistoryImagesIntoMessages,
+  injectPromptImagesIntoUserMessage,
+  resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
 } from "./attempt.js";
@@ -63,6 +66,64 @@ describe("injectHistoryImagesIntoMessages", () => {
   });
 });
 
+describe("injectPromptImagesIntoUserMessage", () => {
+  const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
+
+  it("injects prompt images into a string user message", () => {
+    const message = {
+      role: "user",
+      content: "请看这张图",
+      timestamp: Date.now(),
+    } as AgentMessage;
+
+    const updated = injectPromptImagesIntoUserMessage(message, [image]) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >;
+
+    expect(Array.isArray(updated.content)).toBe(true);
+    if (!Array.isArray(updated.content)) {
+      throw new Error("expected user content array");
+    }
+    expect(updated.content).toHaveLength(2);
+    expect(updated.content[0]).toMatchObject({ type: "text", text: "请看这张图" });
+    expect(updated.content[1]).toMatchObject({ type: "image", data: "abc", mimeType: "image/png" });
+  });
+
+  it("does not duplicate existing prompt image payloads", () => {
+    const message = {
+      role: "user",
+      content: [
+        { type: "text", text: "图如下" },
+        { type: "image", data: "abc", mimeType: "image/png" },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const updated = injectPromptImagesIntoUserMessage(message, [image]) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >;
+
+    expect(updated).toBe(message);
+    if (!Array.isArray(updated.content)) {
+      throw new Error("expected user content array");
+    }
+    expect(updated.content).toHaveLength(2);
+  });
+
+  it("ignores non-user messages", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "ok" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const updated = injectPromptImagesIntoUserMessage(message, [image]);
+    expect(updated).toBe(message);
+  });
+});
+
 describe("resolvePromptBuildHookResult", () => {
   function createLegacyOnlyHookRunner() {
     return {
@@ -116,5 +177,47 @@ describe("resolvePromptModeForSession", () => {
   it("uses full mode for cron sessions", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+  });
+});
+
+describe("resolveAttemptFsWorkspaceOnly", () => {
+  it("uses global tools.fs.workspaceOnly when agent has no override", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+    };
+
+    expect(
+      resolveAttemptFsWorkspaceOnly({
+        config: cfg,
+        sessionAgentId: "main",
+      }),
+    ).toBe(true);
+  });
+
+  it("prefers agent-specific tools.fs.workspaceOnly override", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveAttemptFsWorkspaceOnly({
+        config: cfg,
+        sessionAgentId: "main",
+      }),
+    ).toBe(false);
   });
 });

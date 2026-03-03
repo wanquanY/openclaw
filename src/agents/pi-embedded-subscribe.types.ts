@@ -10,6 +10,8 @@ export type ToolResultFormat = "markdown" | "plain";
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
+  agentId?: string;
+  sessionKey?: string;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
@@ -30,7 +32,6 @@ export type SubscribeEmbeddedPiSessionParams = {
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
-  sessionKey?: string;
 };
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";

@@ -1,4 +1,4 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,12 +9,16 @@ import {
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
-const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
+type WebLoginMethod = "web.login.start" | "web.login.wait";
+const WEB_LOGIN_METHODS = new Set<WebLoginMethod>(["web.login.start", "web.login.wait"]);
 
-const resolveWebLoginProvider = () =>
-  listChannelPlugins().find((plugin) =>
-    (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
-  ) ?? null;
+function resolveRequestedChannel(params: unknown): string | undefined {
+  if (typeof (params as { channel?: unknown }).channel !== "string") {
+    return undefined;
+  }
+  const trimmed = (params as { channel?: string }).channel?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 function resolveAccountId(params: unknown): string | undefined {
   return typeof (params as { accountId?: unknown }).accountId === "string"
@@ -22,12 +26,27 @@ function resolveAccountId(params: unknown): string | undefined {
     : undefined;
 }
 
-function respondProviderUnavailable(respond: RespondFn) {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "web login provider is not available"),
+function providerDeclaresMethod(
+  provider: { gatewayMethods?: string[] },
+  method: WebLoginMethod,
+): boolean {
+  return (provider.gatewayMethods ?? []).some(
+    (item) => WEB_LOGIN_METHODS.has(item as WebLoginMethod) && item === method,
   );
+}
+
+function resolveWebLoginProvider(method: WebLoginMethod, channel?: string) {
+  if (channel) {
+    return getChannelPlugin(channel) ?? null;
+  }
+  return listChannelPlugins().find((plugin) => providerDeclaresMethod(plugin, method)) ?? null;
+}
+
+function respondProviderUnavailable(respond: RespondFn, channel?: string) {
+  const message = channel
+    ? `web login provider is not available for channel ${channel}`
+    : "web login provider is not available";
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
 function respondProviderUnsupported(respond: RespondFn, providerId: string) {
@@ -53,17 +72,19 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      const channel = resolveRequestedChannel(params);
+      const provider = resolveWebLoginProvider("web.login.start", channel);
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respondProviderUnavailable(respond, channel);
         return;
       }
-      await context.stopChannel(provider.id, accountId);
-      if (!provider.gateway?.loginWithQrStart) {
+      const startLogin = provider.gateway?.loginWithQrStart;
+      if (!providerDeclaresMethod(provider, "web.login.start") || !startLogin) {
         respondProviderUnsupported(respond, provider.id);
         return;
       }
-      const result = await provider.gateway.loginWithQrStart({
+      await context.stopChannel(provider.id, accountId);
+      const result = await startLogin({
         force: Boolean((params as { force?: boolean }).force),
         timeoutMs:
           typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
@@ -91,16 +112,18 @@ export const webHandlers: GatewayRequestHandlers = {
     }
     try {
       const accountId = resolveAccountId(params);
-      const provider = resolveWebLoginProvider();
+      const channel = resolveRequestedChannel(params);
+      const provider = resolveWebLoginProvider("web.login.wait", channel);
       if (!provider) {
-        respondProviderUnavailable(respond);
+        respondProviderUnavailable(respond, channel);
         return;
       }
-      if (!provider.gateway?.loginWithQrWait) {
+      const waitLogin = provider.gateway?.loginWithQrWait;
+      if (!providerDeclaresMethod(provider, "web.login.wait") || !waitLogin) {
         respondProviderUnsupported(respond, provider.id);
         return;
       }
-      const result = await provider.gateway.loginWithQrWait({
+      const result = await waitLogin({
         timeoutMs:
           typeof (params as { timeoutMs?: unknown }).timeoutMs === "number"
             ? (params as { timeoutMs?: number }).timeoutMs

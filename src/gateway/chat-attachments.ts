@@ -6,12 +6,17 @@ export type ChatAttachment = {
   mimeType?: string;
   fileName?: string;
   content?: unknown;
+  previewContent?: unknown;
+  previewMimeType?: unknown;
 };
 
 export type ChatImageContent = {
   type: "image";
   data: string;
   mimeType: string;
+  fileName?: string;
+  previewData?: string;
+  previewMimeType?: string;
 };
 
 export type ParsedMessageWithImages = {
@@ -73,6 +78,18 @@ function normalizeAttachment(
   return { label, mime, base64 };
 }
 
+function normalizeOptionalBase64(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(trimmed);
+  return dataUrlMatch ? dataUrlMatch[1] : trimmed;
+}
+
 function validateAttachmentBase64OrThrow(
   normalized: NormalizedAttachment,
   opts: { maxBytes: number },
@@ -97,9 +114,10 @@ function validateAttachmentBase64OrThrow(
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number; log?: AttachmentLog },
+  opts?: { maxBytes?: number; previewMaxBytes?: number; log?: AttachmentLog },
 ): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? 5_000_000; // decoded bytes (5,000,000)
+  const previewMaxBytes = opts?.previewMaxBytes ?? 400_000;
   const log = opts?.log;
   if (!attachments || attachments.length === 0) {
     return { message, images: [] };
@@ -134,10 +152,47 @@ export async function parseMessageWithAttachments(
       );
     }
 
+    const previewBase64 = normalizeOptionalBase64(att.previewContent);
+    let previewData: string | undefined;
+    let previewMimeType: string | undefined;
+    if (previewBase64) {
+      try {
+        validateAttachmentBase64OrThrow(
+          {
+            label: `${label}#preview`,
+            mime: typeof att.previewMimeType === "string" ? att.previewMimeType : "",
+            base64: previewBase64,
+          },
+          { maxBytes: previewMaxBytes },
+        );
+        const previewProvidedMime =
+          typeof att.previewMimeType === "string" ? normalizeMime(att.previewMimeType) : undefined;
+        const previewSniffedMime = normalizeMime(await sniffMimeFromBase64(previewBase64));
+        if (previewSniffedMime && !isImageMime(previewSniffedMime)) {
+          log?.warn(
+            `attachment ${label}: detected non-image preview (${previewSniffedMime}), dropping`,
+          );
+        } else if (!previewSniffedMime && !isImageMime(previewProvidedMime)) {
+          log?.warn(`attachment ${label}: unable to detect preview mime type, dropping`);
+        } else {
+          previewData = previewBase64;
+          previewMimeType =
+            previewSniffedMime ?? previewProvidedMime ?? sniffedMime ?? providedMime ?? mime;
+        }
+      } catch (err) {
+        log?.warn(`attachment ${label}: preview invalid, dropping (${String(err)})`);
+      }
+    }
+
     images.push({
       type: "image",
       data: b64,
       mimeType: sniffedMime ?? providedMime ?? mime,
+      ...(typeof att.fileName === "string" && att.fileName.trim()
+        ? { fileName: att.fileName.trim() }
+        : {}),
+      ...(previewData ? { previewData } : {}),
+      ...(previewMimeType ? { previewMimeType } : {}),
     });
   }
 

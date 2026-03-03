@@ -11,6 +11,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -74,6 +75,7 @@ import {
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -174,6 +176,113 @@ export function injectHistoryImagesIntoMessages(
   return didMutate;
 }
 
+function normalizePromptImagesForPersistence(
+  images: ImageContent[] | undefined,
+): Array<ImageContent & { fileName?: string; previewData?: string; previewMimeType?: string }> {
+  if (!images || images.length === 0) {
+    return [];
+  }
+  const out: Array<
+    ImageContent & { fileName?: string; previewData?: string; previewMimeType?: string }
+  > = [];
+  for (const image of images) {
+    if (!image || image.type !== "image") {
+      continue;
+    }
+    const data = typeof image.data === "string" ? image.data.trim() : "";
+    if (!data) {
+      continue;
+    }
+    const mimeType =
+      typeof image.mimeType === "string" && image.mimeType.trim()
+        ? image.mimeType.trim()
+        : "image/png";
+    const record = image as ImageContent & Record<string, unknown>;
+    const fileName =
+      typeof record.fileName === "string" && record.fileName.trim()
+        ? record.fileName.trim()
+        : undefined;
+    const previewData =
+      typeof record.previewData === "string" && record.previewData.trim()
+        ? record.previewData.trim()
+        : undefined;
+    const previewMimeType =
+      typeof record.previewMimeType === "string" && record.previewMimeType.trim()
+        ? record.previewMimeType.trim()
+        : undefined;
+    out.push({
+      type: "image",
+      data,
+      mimeType,
+      ...(fileName ? { fileName } : {}),
+      ...(previewData ? { previewData } : {}),
+      ...(previewMimeType ? { previewMimeType } : {}),
+    });
+  }
+  return out;
+}
+
+function collectExistingUserImagePayloads(content: unknown): Set<string> {
+  if (!Array.isArray(content)) {
+    return new Set<string>();
+  }
+  return new Set(
+    content
+      .filter((block): block is { type: "image"; data?: unknown } =>
+        Boolean(
+          block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "image" &&
+          typeof (block as { data?: unknown }).data === "string",
+        ),
+      )
+      .map((block) => (block.data as string).trim())
+      .filter(Boolean),
+  );
+}
+
+export function injectPromptImagesIntoUserMessage(
+  message: AgentMessage,
+  images: ImageContent[] | undefined,
+): AgentMessage {
+  if ((message as { role?: unknown }).role !== "user") {
+    return message;
+  }
+  const normalizedImages = normalizePromptImagesForPersistence(images);
+  if (normalizedImages.length === 0) {
+    return message;
+  }
+
+  const userMessage = message as Extract<AgentMessage, { role: "user" }>;
+  const existingImageData = collectExistingUserImagePayloads(userMessage.content);
+  const imagesToAppend = normalizedImages.filter((image) => !existingImageData.has(image.data));
+  if (imagesToAppend.length === 0) {
+    return message;
+  }
+
+  if (typeof userMessage.content === "string") {
+    const textBlocks = userMessage.content
+      ? ([{ type: "text", text: userMessage.content }] as Array<{ type: "text"; text: string }>)
+      : [];
+    return {
+      ...(userMessage as unknown as Record<string, unknown>),
+      content: [...textBlocks, ...imagesToAppend],
+    } as AgentMessage;
+  }
+
+  if (Array.isArray(userMessage.content)) {
+    return {
+      ...(userMessage as unknown as Record<string, unknown>),
+      content: [...userMessage.content, ...imagesToAppend],
+    } as AgentMessage;
+  }
+
+  return {
+    ...(userMessage as unknown as Record<string, unknown>),
+    content: imagesToAppend,
+  } as AgentMessage;
+}
+
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
   messages: unknown[];
@@ -226,6 +335,16 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
     return "full";
   }
   return isSubagentSessionKey(sessionKey) ? "minimal" : "full";
+}
+
+export function resolveAttemptFsWorkspaceOnly(params: {
+  config?: OpenClawConfig;
+  sessionAgentId: string;
+}): boolean {
+  return resolveEffectiveToolFsWorkspaceOnly({
+    cfg: params.config,
+    agentId: params.sessionAgentId,
+  });
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -362,6 +481,10 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
+    });
+    const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
+      config: params.config,
+      sessionAgentId,
     });
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
@@ -576,6 +699,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let pendingPromptImagesForPersistence: ImageContent[] = [];
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -599,6 +723,17 @@ export async function runEmbeddedAttempt(
         inputProvenance: params.inputProvenance,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         allowedToolNames,
+        transformMessageForPersistence: (message) => {
+          if ((message as { role?: unknown }).role !== "user") {
+            return message;
+          }
+          if (pendingPromptImagesForPersistence.length === 0) {
+            return message;
+          }
+          const images = pendingPromptImagesForPersistence;
+          pendingPromptImagesForPersistence = [];
+          return injectPromptImagesIntoUserMessage(message, images);
+        },
       });
       trackSessionManagerAccess(params.sessionFile);
 
@@ -904,6 +1039,7 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        agentId: sessionAgentId,
         hookRunner: getGlobalHookRunner() ?? undefined,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
@@ -1087,6 +1223,7 @@ export async function runEmbeddedAttempt(
             historyMessages: activeSession.messages,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+            workspaceOnly: effectiveFsWorkspaceOnly,
             // Enforce sandbox path restrictions when sandbox is enabled
             sandbox:
               sandbox?.enabled && sandbox?.fsBridge
@@ -1158,10 +1295,17 @@ export async function runEmbeddedAttempt(
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
-          if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
-          } else {
-            await abortable(activeSession.prompt(effectivePrompt));
+          pendingPromptImagesForPersistence = imageResult.images;
+          try {
+            if (imageResult.images.length > 0) {
+              await abortable(
+                activeSession.prompt(effectivePrompt, { images: imageResult.images }),
+              );
+            } else {
+              await abortable(activeSession.prompt(effectivePrompt));
+            }
+          } finally {
+            pendingPromptImagesForPersistence = [];
           }
         } catch (err) {
           promptError = err;

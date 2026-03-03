@@ -174,7 +174,7 @@ export async function handleToolExecutionStart(
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+    await ctx.params.onBlockReplyFlush();
   }
 
   const rawToolName = String(evt.toolName);
@@ -426,8 +426,8 @@ export async function handleToolExecutionEnd(
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {
         toolName,
-        agentId: undefined,
-        sessionKey: undefined,
+        agentId: ctx.params.agentId,
+        sessionKey: ctx.params.sessionKey,
       })
       .catch((err) => {
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);

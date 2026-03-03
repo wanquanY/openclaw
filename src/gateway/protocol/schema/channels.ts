@@ -16,6 +16,17 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TalkProviderConfigSchema = Type.Object(
+  {
+    voiceId: Type.Optional(Type.String()),
+    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+    modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
+    apiKey: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
@@ -23,6 +34,8 @@ export const TalkConfigResultSchema = Type.Object(
         talk: Type.Optional(
           Type.Object(
             {
+              provider: Type.Optional(Type.String()),
+              providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
               voiceId: Type.Optional(Type.String()),
               voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
               modelId: Type.Optional(Type.String()),
@@ -136,6 +149,7 @@ export const ChannelsLogoutParamsSchema = Type.Object(
 
 export const WebLoginStartParamsSchema = Type.Object(
   {
+    channel: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     verbose: Type.Optional(Type.Boolean()),
@@ -146,6 +160,7 @@ export const WebLoginStartParamsSchema = Type.Object(
 
 export const WebLoginWaitParamsSchema = Type.Object(
   {
+    channel: Type.Optional(NonEmptyString),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     accountId: Type.Optional(Type.String()),
   },

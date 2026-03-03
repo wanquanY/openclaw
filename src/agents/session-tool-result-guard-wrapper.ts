@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -21,6 +22,7 @@ export function guardSessionManager(
     agentId?: string;
     sessionKey?: string;
     inputProvenance?: InputProvenance;
+    transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
     allowSyntheticToolResults?: boolean;
     allowedToolNames?: Iterable<string>;
   },
@@ -61,8 +63,12 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
-    transformMessageForPersistence: (message) =>
-      applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
+    transformMessageForPersistence: (message) => {
+      const transformed = opts?.transformMessageForPersistence
+        ? opts.transformMessageForPersistence(message)
+        : message;
+      return applyInputProvenanceToUserMessage(transformed, opts?.inputProvenance);
+    },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
     allowedToolNames: opts?.allowedToolNames,

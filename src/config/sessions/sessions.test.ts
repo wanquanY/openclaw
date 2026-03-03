@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  appendSessionPreviousSession,
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  mergeSessionEntry,
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
@@ -136,6 +138,71 @@ describe("resolveSessionResetPolicy", () => {
   });
 });
 
+describe("appendSessionPreviousSession", () => {
+  it("prepends the replaced session and keeps existing history", () => {
+    const result = appendSessionPreviousSession({
+      previousEntry: {
+        sessionId: "sess-new-old",
+        sessionFile: "/tmp/sess-new-old.jsonl",
+        updatedAt: 200,
+      },
+      existing: [
+        {
+          sessionId: "sess-older",
+          sessionFile: "/tmp/sess-older.jsonl",
+          updatedAt: 100,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        sessionId: "sess-new-old",
+        sessionFile: "/tmp/sess-new-old.jsonl",
+        updatedAt: 200,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: "/tmp/sess-older.jsonl",
+        updatedAt: 100,
+      },
+    ]);
+  });
+
+  it("deduplicates by sessionId and keeps newest metadata", () => {
+    const result = appendSessionPreviousSession({
+      previousEntry: {
+        sessionId: "sess-dup",
+        sessionFile: "/tmp/sess-dup-new.jsonl",
+        updatedAt: 300,
+      },
+      existing: [
+        {
+          sessionId: "sess-dup",
+          sessionFile: "/tmp/sess-dup-old.jsonl",
+          updatedAt: 120,
+        },
+        {
+          sessionId: "sess-older",
+          updatedAt: 80,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        sessionId: "sess-dup",
+        sessionFile: "/tmp/sess-dup-new.jsonl",
+        updatedAt: 300,
+      },
+      {
+        sessionId: "sess-older",
+        updatedAt: 80,
+      },
+    ]);
+  });
+});
+
 describe("session store lock (Promise chain mutex)", () => {
   let lockFixtureRoot = "";
   let lockCaseId = 0;
@@ -214,6 +281,42 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
+  });
+
+  it("clears stale runtime provider when model is patched without provider", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "sess-runtime",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      {
+        model: "gpt-5.2",
+      },
+    );
+    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("normalizes orphan modelProvider fields at store write boundary", async () => {
+    const key = "agent:main:orphan-provider";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-orphan",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBeUndefined();
+    expect(store[key]?.model).toBeUndefined();
   });
 });
 

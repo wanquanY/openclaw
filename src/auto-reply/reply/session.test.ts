@@ -205,6 +205,135 @@ describe("initSessionState thread forking", () => {
     warn.mockRestore();
   });
 
+  it("skips fork and creates fresh session when parent tokens exceed threshold", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-overflow-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const parentSessionId = "parent-overflow";
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: parentSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    const message = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "Parent prompt" },
+    };
+    await fs.writeFile(
+      parentSessionFile,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    // Set totalTokens well above PARENT_FORK_MAX_TOKENS (100_000)
+    await saveSessionStore(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        sessionFile: parentSessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 170_000,
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:456";
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // Should be marked as forked (to prevent re-attempts) but NOT actually forked from parent
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    // Session ID should NOT match the parent — it should be a fresh UUID
+    expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
+    // Session file should NOT be the parent's file (it was not forked)
+    expect(result.sessionEntry.sessionFile).not.toBe(parentSessionFile);
+  });
+
+  it("respects session.parentForkMaxTokens override", async () => {
+    const root = await makeCaseDir("openclaw-thread-session-overflow-override-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+
+    const parentSessionId = "parent-override";
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const header = {
+      type: "session",
+      version: 3,
+      id: parentSessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    };
+    const message = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "Parent prompt" },
+    };
+    await fs.writeFile(
+      parentSessionFile,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+      "utf-8",
+    );
+
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionKey = "agent:main:slack:channel:c1";
+    await saveSessionStore(storePath, {
+      [parentSessionKey]: {
+        sessionId: parentSessionId,
+        sessionFile: parentSessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 170_000,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        parentForkMaxTokens: 200_000,
+      },
+    } as OpenClawConfig;
+
+    const threadSessionKey = "agent:main:slack:channel:c1:thread:789";
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: threadSessionKey,
+        ParentSessionKey: parentSessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.forkedFromParent).toBe(true);
+    expect(result.sessionEntry.sessionFile).toBeTruthy();
+    const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
+    const [sessionHeaderLine] = forkedContent.split("\n");
+    const sessionHeader = JSON.parse(sessionHeaderLine ?? "{}") as { parentSession?: string };
+    expect(sessionHeader.parentSession).toBeTruthy();
+    const resolvedParentSession = await fs.realpath(parentSessionFile);
+    const resolvedForkParentSession = await fs.realpath(sessionHeader.parentSession ?? "");
+    expect(resolvedForkParentSession).toBe(resolvedParentSession);
+  });
+
   it("records topic-specific session files when MessageThreadId is present", async () => {
     const root = await makeCaseDir("openclaw-topic-session-");
     const storePath = path.join(root, "sessions.json");
@@ -365,6 +494,73 @@ describe("initSessionState reset policy", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("records the replaced session in previousSessions when freshness creates a new session", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-history-chain-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:history-chain";
+    const existingSessionId = "history-current";
+    const existingSessionFile = path.join(root, "history-current.jsonl");
+    const olderSessionId = "history-older";
+    const olderSessionFile = path.join(root, "history-older.jsonl");
+    const existingUpdatedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
+    const olderUpdatedAt = new Date(2026, 0, 17, 3, 0, 0).getTime();
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+        previousSessions: [
+          {
+            sessionId: olderSessionId,
+            sessionFile: olderSessionFile,
+            updatedAt: olderUpdatedAt,
+          },
+        ],
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.previousSessions).toEqual([
+      {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+      },
+      {
+        sessionId: olderSessionId,
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.previousSessions).toEqual([
+      {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+      },
+      {
+        sessionId: olderSessionId,
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {

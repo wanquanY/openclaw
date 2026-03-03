@@ -111,6 +111,19 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
+  it("keeps message identifiers for webchat direct chats", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      Surface: "webchat",
+      MessageSid: "short-id",
+      MessageSidFull: "provider-full-id",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBe("provider-full-id");
+  });
+
   it("does not treat group chats as direct based on sender id", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

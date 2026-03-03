@@ -333,6 +333,132 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history keeps small inline image payloads for preview", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      __setMaxChatHistoryMessagesBytesForTest(2 * 1024 * 1024);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now(),
+            content: [
+              { type: "text", text: "请看图" },
+              { type: "image", mimeType: "image/png", data: pngB64 },
+            ],
+          },
+        }),
+      ];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(1);
+
+      const first = messages[0] as {
+        content?: Array<{ type?: string; data?: string; omitted?: boolean }>;
+      };
+      const imageBlock = (first.content ?? []).find((item) => item?.type === "image");
+      expect(imageBlock).toBeTruthy();
+      expect(imageBlock?.data).toBe(pngB64);
+      expect(imageBlock?.omitted).toBeUndefined();
+    });
+  });
+
+  test("chat.history trims oversized inline image payloads", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      __setMaxChatHistoryMessagesBytesForTest(2 * 1024 * 1024);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const hugeB64 = "a".repeat(1_300_000);
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now(),
+            content: [
+              { type: "text", text: "请看大图" },
+              { type: "image", mimeType: "image/png", data: hugeB64 },
+            ],
+          },
+        }),
+      ];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(1);
+
+      const first = messages[0] as {
+        content?: Array<{ type?: string; data?: string; omitted?: boolean; bytes?: number }>;
+      };
+      const imageBlock = (first.content ?? []).find((item) => item?.type === "image");
+      expect(imageBlock).toBeTruthy();
+      expect(imageBlock?.data).toBeUndefined();
+      expect(imageBlock?.omitted).toBe(true);
+      expect(typeof imageBlock?.bytes).toBe("number");
+      expect((imageBlock?.bytes as number) > 1_000_000).toBe(true);
+    });
+  });
+
+  test("chat.history preserves compact preview when oversized image is omitted", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      __setMaxChatHistoryMessagesBytesForTest(2 * 1024 * 1024);
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const hugeB64 = "a".repeat(1_300_000);
+      const previewB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now(),
+            content: [
+              { type: "text", text: "请看大图" },
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: hugeB64,
+                previewData: previewB64,
+                previewMimeType: "image/png",
+              },
+            ],
+          },
+        }),
+      ];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(1);
+
+      const first = messages[0] as {
+        content?: Array<{
+          type?: string;
+          data?: string;
+          omitted?: boolean;
+          bytes?: number;
+          previewData?: string;
+          previewMimeType?: string;
+        }>;
+      };
+      const imageBlock = (first.content ?? []).find((item) => item?.type === "image");
+      expect(imageBlock).toBeTruthy();
+      expect(imageBlock?.data).toBeUndefined();
+      expect(imageBlock?.omitted).toBe(true);
+      expect(typeof imageBlock?.bytes).toBe("number");
+      expect(imageBlock?.previewData).toBe(previewB64);
+      expect(imageBlock?.previewMimeType).toBe("image/png");
+    });
+  });
+
   test("smoke: supports abort and idempotent completion", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;

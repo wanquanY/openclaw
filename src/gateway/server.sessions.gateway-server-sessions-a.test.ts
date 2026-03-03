@@ -202,6 +202,8 @@ describe("gateway server sessions", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: recent,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -456,11 +458,13 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: { sessionId: string; modelProvider?: string; model?: string };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.modelProvider).toBe("anthropic");
+    expect(reset.payload?.entry.model).toBe("claude-sonnet-4-6");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -830,6 +834,88 @@ describe("gateway server sessions", () => {
       reason: "session-reset",
       sendFarewell: true,
     });
+
+    ws.close();
+  });
+
+  test("sessions.reset preserves previousSessions history chain", async () => {
+    const { dir } = await createSessionStoreDir();
+    const currentSessionFile = path.join(dir, "sess-main.jsonl");
+    const olderSessionFile = path.join(dir, "sess-older.jsonl");
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    const currentUpdatedAt = Date.now();
+    const olderUpdatedAt = currentUpdatedAt - 30_000;
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: currentSessionFile,
+          updatedAt: currentUpdatedAt,
+          previousSessions: [
+            {
+              sessionId: "sess-older",
+              sessionFile: olderSessionFile,
+              updatedAt: olderUpdatedAt,
+            },
+          ],
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        sessionId: string;
+        previousSessions?: Array<{
+          sessionId: string;
+          sessionFile?: string;
+          updatedAt?: number;
+        }>;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:main");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.previousSessions).toEqual([
+      {
+        sessionId: "sess-main",
+        sessionFile: currentSessionFile,
+        updatedAt: currentUpdatedAt,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+
+    const persisted = JSON.parse(await fs.readFile(sharedSessionStorePath, "utf-8")) as Record<
+      string,
+      {
+        previousSessions?: Array<{
+          sessionId: string;
+          sessionFile?: string;
+          updatedAt?: number;
+        }>;
+      }
+    >;
+    expect(persisted["agent:main:main"]?.previousSessions).toEqual([
+      {
+        sessionId: "sess-main",
+        sessionFile: currentSessionFile,
+        updatedAt: currentUpdatedAt,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
 
     ws.close();
   });
