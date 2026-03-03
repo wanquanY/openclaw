@@ -423,7 +423,7 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     // 2. Serper
     const serperConfig = resolveSerperConfig(search);
     if (resolveSerperApiKey(serperConfig)) {
-      defaultRuntime.log(
+      logVerbose(
         'web_search: no provider configured, auto-detected "serper" from available API keys',
       );
       return "serper";

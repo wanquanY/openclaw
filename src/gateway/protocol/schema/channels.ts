@@ -149,6 +149,7 @@ export const ChannelsLogoutParamsSchema = Type.Object(
 
 export const WebLoginStartParamsSchema = Type.Object(
   {
+    channel: Type.Optional(NonEmptyString),
     force: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     verbose: Type.Optional(Type.Boolean()),
@@ -159,6 +160,7 @@ export const WebLoginStartParamsSchema = Type.Object(
 
 export const WebLoginWaitParamsSchema = Type.Object(
   {
+    channel: Type.Optional(NonEmptyString),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     accountId: Type.Optional(Type.String()),
   },

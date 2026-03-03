@@ -136,6 +136,7 @@ export const SessionsFilesListParamsSchema = Type.Object(
       Type.Union([Type.Literal("created"), Type.Literal("changed"), Type.Literal("all")]),
     ),
     includeMissing: Type.Optional(Type.Boolean()),
+    includeHistory: Type.Optional(Type.Boolean()),
     includeSpawned: Type.Optional(Type.Boolean()),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10_000 })),
   },

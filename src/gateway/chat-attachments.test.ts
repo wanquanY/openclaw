@@ -59,6 +59,27 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images).toHaveLength(1);
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
+    expect(parsed.images[0]?.fileName).toBe("dot.png");
+  });
+
+  it("keeps optional preview payload when valid", async () => {
+    const parsed = await parseMessageWithAttachments(
+      "see this",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "dot.png",
+          content: PNG_1x1,
+          previewContent: PNG_1x1,
+          previewMimeType: "image/png",
+        },
+      ],
+      { log: { warn: () => {} } },
+    );
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.images[0]?.previewData).toBe(PNG_1x1);
+    expect(parsed.images[0]?.previewMimeType).toBe("image/png");
   });
 
   it("sniffs mime when missing", async () => {

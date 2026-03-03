@@ -496,6 +496,73 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("records the replaced session in previousSessions when freshness creates a new session", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-history-chain-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:history-chain";
+    const existingSessionId = "history-current";
+    const existingSessionFile = path.join(root, "history-current.jsonl");
+    const olderSessionId = "history-older";
+    const olderSessionFile = path.join(root, "history-older.jsonl");
+    const existingUpdatedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
+    const olderUpdatedAt = new Date(2026, 0, 17, 3, 0, 0).getTime();
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+        previousSessions: [
+          {
+            sessionId: olderSessionId,
+            sessionFile: olderSessionFile,
+            updatedAt: olderUpdatedAt,
+          },
+        ],
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.previousSessions).toEqual([
+      {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+      },
+      {
+        sessionId: olderSessionId,
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.previousSessions).toEqual([
+      {
+        sessionId: existingSessionId,
+        sessionFile: existingSessionFile,
+        updatedAt: existingUpdatedAt,
+      },
+      {
+        sessionId: olderSessionId,
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+  });
+
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-edge-");

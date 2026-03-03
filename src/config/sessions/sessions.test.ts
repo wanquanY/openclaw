@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  appendSessionPreviousSession,
   clearSessionStoreCacheForTest,
   loadSessionStore,
   mergeSessionEntry,
@@ -134,6 +135,71 @@ describe("resolveSessionResetPolicy", () => {
 
       expect(groupPolicy.mode).toBe("daily");
     });
+  });
+});
+
+describe("appendSessionPreviousSession", () => {
+  it("prepends the replaced session and keeps existing history", () => {
+    const result = appendSessionPreviousSession({
+      previousEntry: {
+        sessionId: "sess-new-old",
+        sessionFile: "/tmp/sess-new-old.jsonl",
+        updatedAt: 200,
+      },
+      existing: [
+        {
+          sessionId: "sess-older",
+          sessionFile: "/tmp/sess-older.jsonl",
+          updatedAt: 100,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        sessionId: "sess-new-old",
+        sessionFile: "/tmp/sess-new-old.jsonl",
+        updatedAt: 200,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: "/tmp/sess-older.jsonl",
+        updatedAt: 100,
+      },
+    ]);
+  });
+
+  it("deduplicates by sessionId and keeps newest metadata", () => {
+    const result = appendSessionPreviousSession({
+      previousEntry: {
+        sessionId: "sess-dup",
+        sessionFile: "/tmp/sess-dup-new.jsonl",
+        updatedAt: 300,
+      },
+      existing: [
+        {
+          sessionId: "sess-dup",
+          sessionFile: "/tmp/sess-dup-old.jsonl",
+          updatedAt: 120,
+        },
+        {
+          sessionId: "sess-older",
+          updatedAt: 80,
+        },
+      ],
+    });
+
+    expect(result).toEqual([
+      {
+        sessionId: "sess-dup",
+        sessionFile: "/tmp/sess-dup-new.jsonl",
+        updatedAt: 300,
+      },
+      {
+        sessionId: "sess-older",
+        updatedAt: 80,
+      },
+    ]);
   });
 });
 

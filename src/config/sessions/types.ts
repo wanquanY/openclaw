@@ -22,6 +22,12 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionPreviousSession = {
+  sessionId: string;
+  sessionFile?: string;
+  updatedAt?: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -39,6 +45,11 @@ export type SessionEntry = {
   forkedFromParent?: boolean;
   /** Subagent spawn depth (0 = main, 1 = sub-agent, 2 = sub-sub-agent). */
   spawnDepth?: number;
+  /**
+   * Previous session IDs for the same session key (newest first).
+   * Used to preserve continuity across automatic/manual session resets.
+   */
+  previousSessions?: SessionPreviousSession[];
   systemSent?: boolean;
   abortedLastRun?: boolean;
   chatType?: SessionChatType;
@@ -173,6 +184,105 @@ export function setSessionRuntimeModel(
   return true;
 }
 
+export const MAX_SESSION_PREVIOUS_SESSIONS = 64;
+
+function normalizePreviousSessionId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizePreviousSessionFile(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizePreviousSessionUpdatedAt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+export function normalizeSessionPreviousSessions(
+  input: SessionPreviousSession[] | undefined,
+  limit = MAX_SESSION_PREVIOUS_SESSIONS,
+): SessionPreviousSession[] | undefined {
+  if (!Array.isArray(input) || input.length === 0) {
+    return undefined;
+  }
+  const cap = Number.isFinite(limit)
+    ? Math.max(1, Math.floor(limit))
+    : MAX_SESSION_PREVIOUS_SESSIONS;
+  const deduped = new Map<string, SessionPreviousSession>();
+  const orderedIds: string[] = [];
+  for (const raw of input) {
+    const sessionId = normalizePreviousSessionId(raw?.sessionId);
+    if (!sessionId) {
+      continue;
+    }
+    const sessionFile = normalizePreviousSessionFile(raw?.sessionFile);
+    const updatedAt = normalizePreviousSessionUpdatedAt(raw?.updatedAt);
+    const existing = deduped.get(sessionId);
+    if (!existing) {
+      orderedIds.push(sessionId);
+      deduped.set(sessionId, {
+        sessionId,
+        ...(sessionFile ? { sessionFile } : {}),
+        ...(updatedAt ? { updatedAt } : {}),
+      });
+      continue;
+    }
+    const nextUpdatedAt = Math.max(updatedAt ?? 0, existing.updatedAt ?? 0) || undefined;
+    const shouldUseIncomingFile =
+      Boolean(sessionFile) &&
+      (!existing.sessionFile || (updatedAt ?? 0) >= (existing.updatedAt ?? 0));
+    deduped.set(sessionId, {
+      sessionId,
+      sessionFile: shouldUseIncomingFile ? sessionFile : existing.sessionFile,
+      updatedAt: nextUpdatedAt,
+    });
+  }
+  if (orderedIds.length === 0) {
+    return undefined;
+  }
+  const normalized = orderedIds
+    .map((id) => deduped.get(id))
+    .filter((item): item is SessionPreviousSession => Boolean(item))
+    .slice(0, cap);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function appendSessionPreviousSession(params: {
+  previousEntry: Pick<SessionEntry, "sessionId" | "sessionFile" | "updatedAt"> | undefined;
+  existing?: SessionPreviousSession[];
+  limit?: number;
+}): SessionPreviousSession[] | undefined {
+  const previousSessionId = normalizePreviousSessionId(params.previousEntry?.sessionId);
+  const previousSessionFile = normalizePreviousSessionFile(params.previousEntry?.sessionFile);
+  const previousUpdatedAt = normalizePreviousSessionUpdatedAt(params.previousEntry?.updatedAt);
+  const seeded = normalizeSessionPreviousSessions(params.existing, params.limit) ?? [];
+  if (!previousSessionId) {
+    return seeded.length > 0 ? seeded : undefined;
+  }
+  return normalizeSessionPreviousSessions(
+    [
+      {
+        sessionId: previousSessionId,
+        ...(previousSessionFile ? { sessionFile: previousSessionFile } : {}),
+        ...(previousUpdatedAt ? { updatedAt: previousUpdatedAt } : {}),
+      },
+      ...seeded,
+    ],
+    params.limit,
+  );
+}
+
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
@@ -180,7 +290,14 @@ export function mergeSessionEntry(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
+    const normalized = normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
+    const previousSessions = normalizeSessionPreviousSessions(normalized.previousSessions);
+    if (previousSessions) {
+      normalized.previousSessions = previousSessions;
+    } else {
+      delete normalized.previousSessions;
+    }
+    return normalized;
   }
   const next = { ...existing, ...patch, sessionId, updatedAt };
 
@@ -193,7 +310,14 @@ export function mergeSessionEntry(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  const normalized = normalizeSessionRuntimeModelFields(next);
+  const previousSessions = normalizeSessionPreviousSessions(normalized.previousSessions);
+  if (previousSessions) {
+    normalized.previousSessions = previousSessions;
+  } else {
+    delete normalized.previousSessions;
+  }
+  return normalized;
 }
 
 export function resolveFreshSessionTotalTokens(

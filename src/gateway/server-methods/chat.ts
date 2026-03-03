@@ -65,7 +65,12 @@ type AbortedPartialSnapshot = {
 };
 
 const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
-const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 1024 * 1024;
+const CHAT_HISTORY_INLINE_IMAGE_MAX_BYTES = Math.max(
+  64 * 1024,
+  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES - 16 * 1024,
+);
+const CHAT_HISTORY_INLINE_IMAGE_PREVIEW_MAX_BYTES = 384 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 
@@ -132,12 +137,36 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
     changed = true;
   }
   const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
+  if (type === "image") {
+    if (typeof entry.preview_content === "string" && typeof entry.previewData !== "string") {
+      entry.previewData = entry.preview_content;
+      delete entry.preview_content;
+      changed = true;
+    }
+    if (typeof entry.preview_mime_type === "string" && typeof entry.previewMimeType !== "string") {
+      entry.previewMimeType = entry.preview_mime_type;
+      delete entry.preview_mime_type;
+      changed = true;
+    }
+
+    if (typeof entry.previewData === "string") {
+      const previewBytes = Buffer.byteLength(entry.previewData, "utf8");
+      if (previewBytes > CHAT_HISTORY_INLINE_IMAGE_PREVIEW_MAX_BYTES) {
+        delete entry.previewData;
+        delete entry.previewMimeType;
+        changed = true;
+      }
+    }
+
+    if (typeof entry.data === "string") {
+      const bytes = Buffer.byteLength(entry.data, "utf8");
+      if (bytes > CHAT_HISTORY_INLINE_IMAGE_MAX_BYTES) {
+        delete entry.data;
+        entry.omitted = true;
+        entry.bytes = bytes;
+        changed = true;
+      }
+    }
   }
   return { block: changed ? entry : block, changed };
 }

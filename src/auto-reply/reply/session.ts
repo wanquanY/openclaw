@@ -7,6 +7,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  appendSessionPreviousSession,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
   type GroupKeyResolution,
@@ -274,7 +275,7 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
+  let previousSessionEntry: SessionEntry | undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -329,6 +330,10 @@ export async function initSessionState(params: {
       persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
     }
+  }
+
+  if (isNewSession && entry?.sessionId && entry.sessionId !== sessionId) {
+    previousSessionEntry = { ...entry };
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -469,6 +474,17 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.contextTokens = undefined;
+  }
+  if (previousSessionEntry) {
+    const previousSessions = appendSessionPreviousSession({
+      previousEntry: previousSessionEntry,
+      existing: previousSessionEntry.previousSessions,
+    });
+    if (previousSessions) {
+      sessionEntry.previousSessions = previousSessions;
+    } else {
+      delete sessionEntry.previousSessions;
+    }
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };

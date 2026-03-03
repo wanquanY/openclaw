@@ -838,6 +838,88 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.reset preserves previousSessions history chain", async () => {
+    const { dir } = await createSessionStoreDir();
+    const currentSessionFile = path.join(dir, "sess-main.jsonl");
+    const olderSessionFile = path.join(dir, "sess-older.jsonl");
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    const currentUpdatedAt = Date.now();
+    const olderUpdatedAt = currentUpdatedAt - 30_000;
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: currentSessionFile,
+          updatedAt: currentUpdatedAt,
+          previousSessions: [
+            {
+              sessionId: "sess-older",
+              sessionFile: olderSessionFile,
+              updatedAt: olderUpdatedAt,
+            },
+          ],
+        },
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: {
+        sessionId: string;
+        previousSessions?: Array<{
+          sessionId: string;
+          sessionFile?: string;
+          updatedAt?: number;
+        }>;
+      };
+    }>(ws, "sessions.reset", {
+      key: "main",
+    });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.key).toBe("agent:main:main");
+    expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.previousSessions).toEqual([
+      {
+        sessionId: "sess-main",
+        sessionFile: currentSessionFile,
+        updatedAt: currentUpdatedAt,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+
+    const persisted = JSON.parse(await fs.readFile(sharedSessionStorePath, "utf-8")) as Record<
+      string,
+      {
+        previousSessions?: Array<{
+          sessionId: string;
+          sessionFile?: string;
+          updatedAt?: number;
+        }>;
+      }
+    >;
+    expect(persisted["agent:main:main"]?.previousSessions).toEqual([
+      {
+        sessionId: "sess-main",
+        sessionFile: currentSessionFile,
+        updatedAt: currentUpdatedAt,
+      },
+      {
+        sessionId: "sess-older",
+        sessionFile: olderSessionFile,
+        updatedAt: olderUpdatedAt,
+      },
+    ]);
+
+    ws.close();
+  });
+
   test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
