@@ -1,5 +1,6 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import type { TemplateContext } from "../templating.js";
 
 function safeTrim(value: unknown): string | undefined {
@@ -110,6 +111,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
+  const resolvedMessageId = messageId ?? messageIdFull;
   const conversationInfo = {
     message_id: includeMessageIds ? resolvedMessageId : undefined,
     message_id_full: includeMessageIds
