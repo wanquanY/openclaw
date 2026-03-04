@@ -11,6 +11,37 @@ function safeTrim(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function formatConversationTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  const formatted = formatZonedTimestamp(date);
+  if (!formatted) {
+    return undefined;
+  }
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+    return weekday ? `${weekday} ${formatted}` : formatted;
+  } catch {
+    return formatted;
+  }
+}
+
+function resolveInboundChannel(ctx: TemplateContext): string | undefined {
+  let channelValue = safeTrim(ctx.OriginatingChannel) ?? safeTrim(ctx.Surface);
+  if (!channelValue) {
+    const provider = safeTrim(ctx.Provider);
+    if (provider !== "webchat" && ctx.Surface !== "webchat") {
+      channelValue = provider;
+    }
+  }
+  return channelValue;
+}
+
 function isInternalWebchatContext(ctx: TemplateContext): boolean {
   const originatingChannel = safeTrim(ctx.OriginatingChannel)?.toLowerCase();
   const surface = safeTrim(ctx.Surface)?.toLowerCase();
@@ -61,6 +92,11 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+  const directChannelValue = resolveInboundChannel(ctx);
+  const includeDirectConversationInfo = Boolean(
+    directChannelValue && directChannelValue !== "webchat",
+  );
+  const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
   const includeMessageIds = !isDirect || isInternalWebchatContext(ctx);
 
   const messageId = safeTrim(ctx.MessageSid);
@@ -69,14 +105,14 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
-    message_id: includeMessageIds ? messageId : undefined,
+    message_id: includeMessageIds ? resolvedMessageId : undefined,
     message_id_full: includeMessageIds
-      ? messageIdFull && messageIdFull !== messageId
+      ? messageIdFull && messageIdFull !== resolvedMessageId
         ? messageIdFull
         : undefined
       : undefined,
-    reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
-    sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
+    reply_to_id: shouldIncludeConversationInfo ? safeTrim(ctx.ReplyToId) : undefined,
+    sender_id: shouldIncludeConversationInfo ? safeTrim(ctx.SenderId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
       ? (safeTrim(ctx.SenderName) ??

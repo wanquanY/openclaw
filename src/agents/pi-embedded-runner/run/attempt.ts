@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -1370,7 +1371,6 @@ export async function runEmbeddedAttempt(
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
-        agentId: sessionAgentId,
       });
 
       const {

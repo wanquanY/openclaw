@@ -12,6 +12,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   runId: string;
   agentId?: string;
   sessionKey?: string;
+  /**
+   * OpenClaw logical session identifier (may differ from AgentSession.id in ephemeral runs).
+   */
+  sessionId?: string;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
