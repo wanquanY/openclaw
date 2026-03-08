@@ -188,7 +188,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(child.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
-  it("sessions_spawn runs cleanup via lifecycle events", async () => {
+  it("sessions_spawn ignores cleanup=delete via lifecycle events", async () => {
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
       ...buildDiscordCleanupHooks((key) => {
@@ -213,9 +213,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       endedAt: 2345,
     });
 
-    await waitFor(
-      () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
-    );
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -251,10 +249,10 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
     expect(sendCalls.length).toBe(0);
 
-    expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
+    expect(deletedKey).toBeUndefined();
   });
 
-  it("sessions_spawn deletes session when cleanup=delete via agent.wait", async () => {
+  it("sessions_spawn ignores cleanup=delete via agent.wait", async () => {
     let deletedKey: string | undefined;
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
@@ -278,8 +276,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     await waitFor(
       () =>
         ctx.waitCalls.some((call) => call.runId === child.runId) &&
-        ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
-        Boolean(deletedKey),
+        ctx.calls.filter((call) => call.method === "agent").length >= 2,
     );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
@@ -303,8 +300,8 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     const sendCalls = ctx.calls.filter((c) => c.method === "send");
     expect(sendCalls.length).toBe(0);
 
-    // Session should be deleted
-    expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
+    // Tool-level cleanup argument is intentionally ignored; child session stays persisted.
+    expect(deletedKey).toBeUndefined();
   });
 
   it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {

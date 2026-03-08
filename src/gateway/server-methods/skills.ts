@@ -126,10 +126,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params as {
       name: string;
       installId: string;
+      agentId?: string;
       timeoutMs?: number;
     };
     const cfg = loadConfig();
-    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
+    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
+    if (agentIdRaw) {
+      const knownAgents = listAgentIds(cfg);
+      if (!knownAgents.includes(agentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
+        );
+        return;
+      }
+    }
+    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId);
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,

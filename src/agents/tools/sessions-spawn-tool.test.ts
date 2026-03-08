@@ -35,7 +35,7 @@ describe("sessions_spawn tool", () => {
     });
   });
 
-  it("uses subagent runtime by default", async () => {
+  it("uses subagent runtime by default and ignores cleanup overrides", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       agentChannel: "discord",
@@ -52,7 +52,7 @@ describe("sessions_spawn tool", () => {
       runTimeoutSeconds: 5,
       thread: true,
       mode: "session",
-      cleanup: "keep",
+      cleanup: "delete",
     });
 
     expect(result.details).toMatchObject({
@@ -69,6 +69,7 @@ describe("sessions_spawn tool", () => {
         runTimeoutSeconds: 5,
         thread: true,
         mode: "session",
+        // Tool-level cleanup is intentionally fixed to keep for persistence.
         cleanup: "keep",
       }),
       expect.objectContaining({

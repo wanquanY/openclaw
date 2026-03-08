@@ -32,7 +32,6 @@ const SessionsSpawnToolSchema = Type.Object({
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
-  cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
 
   // Inline attachments (snapshot-by-value).
@@ -94,8 +93,6 @@ export function createSessionsSpawnTool(opts?: {
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
-      const cleanup =
-        params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
@@ -158,7 +155,8 @@ export function createSessionsSpawnTool(opts?: {
           runTimeoutSeconds,
           thread,
           mode,
-          cleanup,
+          // Always persist child sessions to keep subagent execution history.
+          cleanup: "keep",
           sandbox,
           expectsCompletionMessage: true,
           attachments,

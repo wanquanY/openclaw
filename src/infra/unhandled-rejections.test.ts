@@ -79,6 +79,11 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for wrapped fetch failed messages", () => {
+    const error = new Error("Failed to get gateway information from Discord: fetch failed");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for fetch failed with unclassified cause", () => {
     const cause = Object.assign(new Error("unknown socket state"), { code: "UNKNOWN" });
     const error = Object.assign(new TypeError("fetch failed"), { cause });

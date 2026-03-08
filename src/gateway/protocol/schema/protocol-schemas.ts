@@ -126,6 +126,12 @@ import {
 } from "./nodes.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  SecretsReloadParamsSchema,
+  SecretsResolveAssignmentSchema,
+  SecretsResolveParamsSchema,
+  SecretsResolveResultSchema,
+} from "./secrets.js";
+import {
   SessionFileMutationEventSchema,
   SessionFileMutationOpSchema,
   SessionFileActionSchema,
@@ -157,7 +163,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
-export const ProtocolSchemas = {
+export const ProtocolSchemas: Record<string, TSchema> = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,
