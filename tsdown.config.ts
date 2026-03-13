@@ -1,3 +1,5 @@
+import { defineConfig } from "tsdown";
+
 const env = {
   NODE_ENV: "production",
 };

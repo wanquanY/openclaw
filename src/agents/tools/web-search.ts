@@ -130,7 +130,10 @@ function freshnessToPerplexityRecency(freshness: string | undefined): string | u
   if (!freshness) {
     return undefined;
   }
-  return FRESHNESS_TO_RECENCY[freshness] ?? (PERPLEXITY_RECENCY_VALUES.has(freshness) ? freshness : undefined);
+  return (
+    FRESHNESS_TO_RECENCY[freshness] ??
+    (PERPLEXITY_RECENCY_VALUES.has(freshness) ? freshness : undefined)
+  );
 }
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -1693,7 +1696,6 @@ async function runWebSearch(params: {
   kimiModel?: string;
   serperBaseUrl?: string;
   braveMode?: "web" | "llm-context";
-  braveMode?: "web" | "llm-context";
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1707,7 +1709,7 @@ async function runWebSearch(params: {
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : params.provider === "serper"
               ? (params.serperBaseUrl ?? DEFAULT_SERPER_BASE_URL)
-            : "";
+              : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
       ? `${params.provider}:llm-context:${params.query}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.freshness || "default"}`
@@ -2093,7 +2095,7 @@ export function createWebSearchTool(options?: {
               ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
               : braveMode === "llm-context"
                 ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
-              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+                : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
