@@ -65,6 +65,34 @@ describe("gateway server health/presence", () => {
     },
   );
 
+  test("advertised events.subscribe method is callable", async () => {
+    const { ws, hello } = await harness.openClient();
+    const methods = (hello as { features?: { methods?: string[] } })?.features?.methods ?? [];
+    expect(methods).toContain("events.subscribe");
+    expect(methods).toContain("events.unsubscribe");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "events-subscribe-1",
+        method: "events.subscribe",
+        params: { sessionKey: "session-health-test", streams: ["tool"] },
+      }),
+    );
+    const subscribeRes = await onceMessage<GatewayFrame>(
+      ws,
+      (o) => o.type === "res" && o.id === "events-subscribe-1",
+    );
+    expect(subscribeRes.ok).toBe(true);
+    expect(subscribeRes.payload).toMatchObject({
+      ok: true,
+      sessionKey: "session-health-test",
+      streams: ["tool"],
+    });
+
+    ws.close();
+  });
+
   test("broadcasts heartbeat events and serves last-heartbeat", async () => {
     type HeartbeatPayload = {
       ts: number;

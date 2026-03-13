@@ -170,7 +170,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
-export const ProtocolSchemas: Record<string, TSchema> = {
+export const ProtocolSchemas = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
   RequestFrame: RequestFrameSchema,

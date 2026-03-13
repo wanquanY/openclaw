@@ -1,8 +1,10 @@
 import fs from "node:fs";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
+  type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
 import saveSessionToMemory from "../../hooks/bundled/session-memory/handler.js";
@@ -25,7 +27,9 @@ import {
 } from "../protocol/index.js";
 import { listSessionFilesForGateway, trackSessionFilesForGateway } from "../session-files.js";
 import {
+  archiveSessionTranscriptsForSession,
   cleanupSessionBeforeMutation,
+  emitSessionUnboundLifecycleEvent,
   performGatewaySessionReset,
 } from "../session-reset-service.js";
 import {
@@ -36,6 +40,7 @@ import {
   pruneLegacyStoreKeys,
   readSessionPreviewItemsFromTranscript,
   resolveGatewaySessionStoreTarget,
+  resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,

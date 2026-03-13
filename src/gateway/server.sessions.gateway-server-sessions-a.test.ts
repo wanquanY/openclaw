@@ -1044,7 +1044,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.reset preserves previousSessions history chain", async () => {
-    const { dir } = await createSessionStoreDir();
+    const { dir, storePath } = await createSessionStoreDir();
     const currentSessionFile = path.join(dir, "sess-main.jsonl");
     const olderSessionFile = path.join(dir, "sess-older.jsonl");
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -1099,7 +1099,7 @@ describe("gateway server sessions", () => {
       },
     ]);
 
-    const persisted = JSON.parse(await fs.readFile(sharedSessionStorePath, "utf-8")) as Record<
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       {
         previousSessions?: Array<{
