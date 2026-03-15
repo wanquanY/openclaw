@@ -2137,6 +2137,7 @@ export function createWebSearchTool(options?: {
       if (
         country &&
         provider !== "brave" &&
+        provider !== "serper" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2144,7 +2145,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "country filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `country filtering is not supported by the ${provider} provider. Only Brave and Perplexity support country filtering.`,
+              : `country filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and Serper support country filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -2152,6 +2153,7 @@ export function createWebSearchTool(options?: {
       if (
         language &&
         provider !== "brave" &&
+        provider !== "serper" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2159,7 +2161,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+              : `language filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and Serper support language filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -2176,7 +2178,10 @@ export function createWebSearchTool(options?: {
       const normalizedBraveLanguageParams =
         provider === "brave"
           ? normalizeBraveLanguageParams({ search_lang: search_lang || language, ui_lang })
-          : { search_lang: language, ui_lang };
+          : {
+              search_lang: provider === "serper" ? search_lang || language : language,
+              ui_lang,
+            };
       if (normalizedBraveLanguageParams.invalidField === "search_lang") {
         return jsonResult({
           error: "invalid_search_lang",
