@@ -23,8 +23,12 @@ import {
   createSessionEventSubscriptionRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+  type HookClientIpConfig,
+} from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -54,6 +58,7 @@ export async function createGatewayRuntimeState(params: {
   rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
   hooksConfig: () => HooksConfigResolved | null;
+  getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
@@ -115,6 +120,7 @@ export async function createGatewayRuntimeState(params: {
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
     getHooksConfig: params.hooksConfig,
+    getClientIpConfig: params.getHookClientIpConfig,
     bindHost: params.bindHost,
     port: params.port,
     logHooks: params.logHooks,
@@ -187,7 +193,7 @@ export async function createGatewayRuntimeState(params: {
 
   const wss = new WebSocketServer({
     noServer: true,
-    maxPayload: MAX_PAYLOAD_BYTES,
+    maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
   });
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
