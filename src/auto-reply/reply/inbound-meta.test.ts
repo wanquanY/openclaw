@@ -111,7 +111,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct webchat chats", () => {
+  it("keeps message identifiers for direct webchat chats routed through OriginatingChannel", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "webchat",
@@ -119,7 +119,9 @@ describe("buildInboundUserContextPrefix", () => {
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
-    expect(text).toBe("");
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBe("provider-full-id");
   });
 
   it("keeps message identifiers for webchat direct chats", () => {
@@ -241,7 +243,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
+    expect(conversationInfo["message_id_full"]).toBe("full-provider-message-id");
   });
 
   it("falls back to MessageSidFull when MessageSid is missing", () => {

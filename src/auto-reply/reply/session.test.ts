@@ -907,7 +907,7 @@ describe("initSessionState reset policy", () => {
     const existingUpdatedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
     const olderUpdatedAt = new Date(2026, 0, 17, 3, 0, 0).getTime();
 
-    await saveSessionStore(storePath, {
+    await writeSessionStoreFast(storePath, {
       [sessionKey]: {
         sessionId: existingSessionId,
         sessionFile: existingSessionFile,
