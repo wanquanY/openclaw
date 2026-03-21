@@ -6,6 +6,7 @@ import { logVerbose } from "../../globals.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { normalizeXaiModelId } from "../model-id-normalization.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
@@ -24,6 +25,7 @@ import {
 } from "./web-shared.js";
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "serper"] as const;
+type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -163,7 +165,7 @@ function normalizeToIsoDate(value: string): string | undefined {
 }
 
 function createWebSearchSchema(params: {
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: SearchProvider;
   perplexityTransport?: PerplexityTransport;
 }) {
   const querySchema = {
@@ -618,7 +620,7 @@ function resolveSerperBaseUrl(serper?: SerperConfig): string {
   return fromConfig || DEFAULT_SERPER_BASE_URL;
 }
 
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function missingSearchKeyPayload(provider: SearchProvider) {
   if (provider === "serper") {
     return {
       error: "missing_serper_api_key",
@@ -666,7 +668,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(search?: WebSearchConfig): SearchProvider {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
@@ -925,7 +927,10 @@ function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
 function resolveGrokModel(grok?: GrokConfig): string {
   const fromConfig =
     grok && "model" in grok && typeof grok.model === "string" ? grok.model.trim() : "";
-  return fromConfig || DEFAULT_GROK_MODEL;
+  if (fromConfig) {
+    return normalizeXaiModelId(fromConfig);
+  }
+  return DEFAULT_GROK_MODEL;
 }
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
@@ -1173,7 +1178,7 @@ function normalizeBraveLanguageParams(params: { search_lang?: string; ui_lang?: 
  */
 function normalizeFreshness(
   value: string | undefined,
-  provider: (typeof SEARCH_PROVIDERS)[number],
+  provider: SearchProvider,
 ): string | undefined {
   if (!value) {
     return undefined;
@@ -1675,7 +1680,7 @@ async function runWebSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: SearchProvider;
   country?: string;
   language?: string;
   search_lang?: string;
@@ -2066,10 +2071,11 @@ export function createWebSearchTool(options?: {
     return null;
   }
 
-  const provider =
-    options?.runtimeWebSearch?.selectedProvider ??
-    options?.runtimeWebSearch?.providerConfigured ??
-    resolveSearchProvider(search);
+  const runtimeProviderCandidate =
+    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
+  const provider: SearchProvider = isSearchProvider(runtimeProviderCandidate)
+    ? runtimeProviderCandidate
+    : resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const perplexitySchemaTransportHint =
     options?.runtimeWebSearch?.perplexityTransport ??
@@ -2096,7 +2102,6 @@ export function createWebSearchTool(options?: {
               : braveMode === "llm-context"
                 ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
                 : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
-
   return {
     label: "Web Search",
     name: "web_search",
@@ -2414,3 +2419,6 @@ export const __testing = {
   resolveBraveMode,
   mapBraveLlmContextResults,
 } as const;
+function isSearchProvider(value: string | undefined): value is SearchProvider {
+  return SEARCH_PROVIDERS.includes(value as SearchProvider);
+}

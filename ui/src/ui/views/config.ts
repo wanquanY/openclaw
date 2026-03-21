@@ -1060,16 +1060,15 @@ export function renderConfig(props: ConfigProps) {
                           `
                         : nothing
                     }
-                    <label class="field config-raw-field">
+                    <div class="field config-raw-field">
                       <span style="display:flex;align-items:center;gap:8px;">
-                        Raw JSON5
+                        Raw config (JSON/JSON5)
                         ${
                           sensitiveCount > 0
                             ? html`
                               <span class="pill pill--sm">${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"} ${blurred ? "redacted" : "visible"}</span>
                               <button
-                                class="btn btn--icon ${blurred ? "" : "active"}"
-                                style="width:28px;height:28px;padding:0;"
+                                class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
                                 title=${
                                   blurred ? "Reveal sensitive values" : "Hide sensitive values"
                                 }
@@ -1088,7 +1087,7 @@ export function renderConfig(props: ConfigProps) {
                       </span>
                       <textarea
                         class="${blurred ? "config-raw-redacted" : ""}"
-                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw JSON5 config"}
+                        placeholder=${blurred ? REDACTED_PLACEHOLDER : "Raw config (JSON/JSON5)"}
                         .value=${blurred ? "" : props.raw}
                         ?readonly=${blurred}
                         @input=${(e: Event) => {
@@ -1098,7 +1097,7 @@ export function renderConfig(props: ConfigProps) {
                           props.onRawChange((e.target as HTMLTextAreaElement).value);
                         }}
                       ></textarea>
-                    </label>
+                    </div>
                   `;
                   })()
           }

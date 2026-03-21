@@ -22,7 +22,7 @@ const callGatewayMock = vi.hoisted(() =>
   }),
 );
 
-const announceSpy = vi.hoisted(() => vi.fn(async () => true));
+const announceSpy = vi.hoisted(() => vi.fn(async (_payload?: unknown) => true));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,

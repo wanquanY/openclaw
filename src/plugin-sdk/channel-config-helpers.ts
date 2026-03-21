@@ -3,6 +3,15 @@ import {
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
 import {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+  type ConfigWriteAuthorizationResult,
+  type ConfigWriteScope,
+  type ConfigWriteTarget,
+} from "../channels/plugins/config-writes.js";
+import {
   collectAllowlistProviderGroupPolicyWarnings,
   collectAllowlistProviderRestrictSendersWarnings,
   collectOpenGroupPolicyConfiguredRouteWarnings,
@@ -16,6 +25,14 @@ import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+
+export {
+  authorizeConfigWrite,
+  canBypassConfigWritePolicy,
+  formatConfigWriteDeniedMessage,
+  resolveChannelConfigWrites,
+};
+export type { ConfigWriteAuthorizationResult, ConfigWriteScope, ConfigWriteTarget };
 
 /** Coerce mixed allowlist config values into plain strings without trimming or deduping. */
 export function mapAllowFromEntries(
@@ -41,8 +58,11 @@ export function resolveOptionalConfigString(
 }
 
 /** Build the shared allowlist/default target adapter surface for account-scoped channel configs. */
-export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
-  resolveAccount: (params: { cfg: OpenClawConfig; accountId?: string | null }) => ResolvedAccount;
+export function createScopedAccountConfigAccessors<
+  ResolvedAccount,
+  Config extends OpenClawConfig = OpenClawConfig,
+>(params: {
+  resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
@@ -52,7 +72,9 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
 > {
   const base = {
     resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      mapAllowFromEntries(params.resolveAllowFrom(params.resolveAccount({ cfg, accountId }))),
+      mapAllowFromEntries(
+        params.resolveAllowFrom(params.resolveAccount({ cfg: cfg as Config, accountId })),
+      ),
     formatAllowFrom: ({ allowFrom }: { allowFrom: Array<string | number> }) =>
       params.formatAllowFrom(allowFrom),
   };
@@ -65,7 +87,7 @@ export function createScopedAccountConfigAccessors<ResolvedAccount>(params: {
     ...base,
     resolveDefaultTo: ({ cfg, accountId }) =>
       resolveOptionalConfigString(
-        params.resolveDefaultTo?.(params.resolveAccount({ cfg, accountId })),
+        params.resolveDefaultTo?.(params.resolveAccount({ cfg: cfg as Config, accountId })),
       ),
   };
 }
@@ -160,7 +182,7 @@ export function createScopedChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       allowTopLevel: params.allowTopLevel,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
@@ -316,7 +338,7 @@ export function createTopLevelChannelConfigAdapter<
       deleteMode: params.deleteMode,
       clearBaseFields: params.clearBaseFields,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,
@@ -438,7 +460,7 @@ export function createHybridChannelConfigAdapter<
       clearBaseFields: params.clearBaseFields,
       preserveSectionOnDefaultDelete: params.preserveSectionOnDefaultDelete,
     }),
-    ...createScopedAccountConfigAccessors<AccessorAccount>({
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccount,
       resolveAllowFrom: params.resolveAllowFrom,
       formatAllowFrom: params.formatAllowFrom,

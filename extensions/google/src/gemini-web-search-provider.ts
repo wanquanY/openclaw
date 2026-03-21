@@ -1,30 +1,30 @@
 import { Type } from "@sinclair/typebox";
-import { readNumberParam, readStringParam } from "../../../src/agents/tools/common.js";
-import { resolveCitationRedirectUrl } from "../../../src/agents/tools/web-search-citation-redirect.js";
-import type { SearchConfigRecord } from "../../../src/agents/tools/web-search-provider-common.js";
 import {
   buildSearchCacheKey,
+  buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  getScopedCredentialValue,
   MAX_SEARCH_COUNT,
+  mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
+  readNumberParam,
   readProviderEnvValue,
+  readStringParam,
+  resolveCitationRedirectUrl,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  withTrustedWebSearchEndpoint,
-  writeCachedSearchPayload,
-} from "../../../src/agents/tools/web-search-provider-common.js";
-import {
-  resolveProviderWebSearchPluginConfig,
+  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
-} from "../../../src/agents/tools/web-search-provider-config.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type {
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-} from "../../../src/plugins/types.js";
-import { wrapWebContent } from "../../../src/security/external-content.js";
+  type SearchConfigRecord,
+  type WebSearchProviderPlugin,
+  type WebSearchProviderToolDefinition,
+  withTrustedWebSearchEndpoint,
+  wrapWebContent,
+  writeCachedSearchPayload,
+} from "openclaw/plugin-sdk/provider-web-search";
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -57,15 +57,8 @@ type GeminiGroundingResponse = {
   };
 };
 
-function resolveGeminiConfig(
-  config?: OpenClawConfig,
-  searchConfig?: SearchConfigRecord,
-): GeminiConfig {
-  const pluginConfig = resolveProviderWebSearchPluginConfig(config, "google");
-  if (pluginConfig) {
-    return pluginConfig as GeminiConfig;
-  }
-  const gemini = (searchConfig as Record<string, unknown> | undefined)?.gemini;
+function resolveGeminiConfig(searchConfig?: SearchConfigRecord): GeminiConfig {
+  const gemini = searchConfig?.gemini;
   return gemini && typeof gemini === "object" && !Array.isArray(gemini)
     ? (gemini as GeminiConfig)
     : {};
@@ -73,7 +66,7 @@ function resolveGeminiConfig(
 
 function resolveGeminiApiKey(gemini?: GeminiConfig): string | undefined {
   return (
-    readConfiguredSecretString(gemini?.apiKey, "plugins.entries.google.config.webSearch.apiKey") ??
+    readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"])
   );
 }
@@ -180,7 +173,6 @@ function createGeminiSchema() {
 }
 
 function createGeminiToolDefinition(
-  config?: OpenClawConfig,
   searchConfig?: SearchConfigRecord,
 ): WebSearchProviderToolDefinition {
   return {
@@ -189,31 +181,18 @@ function createGeminiToolDefinition(
     parameters: createGeminiSchema(),
     execute: async (args) => {
       const params = args as Record<string, unknown>;
-      for (const name of ["country", "language", "freshness", "date_after", "date_before"]) {
-        if (readStringParam(params, name)) {
-          const label =
-            name === "country"
-              ? "country filtering"
-              : name === "language"
-                ? "language filtering"
-                : name === "freshness"
-                  ? "freshness filtering"
-                  : "date_after/date_before filtering";
-          return {
-            error: name.startsWith("date_") ? "unsupported_date_filter" : `unsupported_${name}`,
-            message: `${label} is not supported by the gemini provider. Only Brave and Perplexity support ${name === "country" ? "country filtering" : name === "language" ? "language filtering" : name === "freshness" ? "freshness" : "date filtering"}.`,
-            docs: "https://docs.openclaw.ai/tools/web",
-          };
-        }
+      const unsupportedResponse = buildUnsupportedSearchFilterResponse(params, "gemini");
+      if (unsupportedResponse) {
+        return unsupportedResponse;
       }
 
-      const geminiConfig = resolveGeminiConfig(config, searchConfig);
+      const geminiConfig = resolveGeminiConfig(searchConfig);
       const apiKey = resolveGeminiApiKey(geminiConfig);
       if (!apiKey) {
         return {
           error: "missing_gemini_api_key",
           message:
-            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure plugins.entries.google.config.webSearch.apiKey.",
+            "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey.",
           docs: "https://docs.openclaw.ai/tools/web",
         };
       }
@@ -274,27 +253,22 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     autoDetectOrder: 20,
     credentialPath: "plugins.entries.google.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.google.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => {
-      const gemini = searchConfig?.gemini;
-      return gemini && typeof gemini === "object" && !Array.isArray(gemini)
-        ? (gemini as Record<string, unknown>).apiKey
-        : undefined;
-    },
-    setCredentialValue: (searchConfigTarget, value) => {
-      const scoped = searchConfigTarget.gemini;
-      if (!scoped || typeof scoped !== "object" || Array.isArray(scoped)) {
-        searchConfigTarget.gemini = { apiKey: value };
-        return;
-      }
-      (scoped as Record<string, unknown>).apiKey = value;
-    },
+    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "gemini"),
+    setCredentialValue: (searchConfigTarget, value) =>
+      setScopedCredentialValue(searchConfigTarget, "gemini", value),
     getConfiguredCredentialValue: (config) =>
       resolveProviderWebSearchPluginConfig(config, "google")?.apiKey,
     setConfiguredCredentialValue: (configTarget, value) => {
       setProviderWebSearchPluginConfigValue(configTarget, "google", "apiKey", value);
     },
     createTool: (ctx) =>
-      createGeminiToolDefinition(ctx.config, ctx.searchConfig as SearchConfigRecord | undefined),
+      createGeminiToolDefinition(
+        mergeScopedSearchConfig(
+          ctx.searchConfig as SearchConfigRecord | undefined,
+          "gemini",
+          resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+        ) as SearchConfigRecord | undefined,
+      ),
   };
 }
 

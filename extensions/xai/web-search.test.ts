@@ -3,7 +3,7 @@ import {
   resolveWebSearchProviderCredential,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../src/test-utils/env.js";
+import { withEnv } from "../../test/helpers/extensions/env.js";
 import { __testing } from "./web-search.js";
 
 const { extractXaiWebSearchContent, resolveXaiInlineCitations, resolveXaiWebSearchModel } =
@@ -42,6 +42,19 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
       "grok-4-fast-reasoning",
     );
+  });
+
+  it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-reasoning" },
+      }),
+    ).toBe("grok-4.20-reasoning");
+    expect(
+      resolveXaiWebSearchModel({
+        grok: { model: "grok-4.20-experimental-beta-0304-non-reasoning" },
+      }),
+    ).toBe("grok-4.20-non-reasoning");
   });
 
   it("defaults inlineCitations to false", () => {
