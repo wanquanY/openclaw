@@ -65,6 +65,7 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
+    sessionKey: opts?.sessionKey,
     transformMessageForPersistence: (message) => {
       const transformed = opts?.transformMessageForPersistence
         ? opts.transformMessageForPersistence(message)

@@ -13,10 +13,10 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
-import { unbindThreadBindingsBySessionKey } from "../discord/monitor/thread-bindings.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -26,36 +26,17 @@ import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscripts,
   loadSessionEntry,
-  pruneLegacyStoreKeys,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+let cachedChannelRuntime: ReturnType<typeof createPluginRuntime>["channel"] | undefined;
 
-function migrateAndPruneSessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  key: string;
-  store: Record<string, SessionEntry>;
-}) {
-  const target = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.key,
-    store: params.store,
-  });
-  const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
-    }
-  }
-  pruneLegacyStoreKeys({
-    store: params.store,
-    canonicalKey: primaryKey,
-    candidates: target.storeKeys,
-  });
-  return { target, primaryKey, entry: params.store[primaryKey] };
+function getChannelRuntime() {
+  cachedChannelRuntime ??= createPluginRuntime().channel;
+  return cachedChannelRuntime;
 }
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
@@ -96,7 +77,8 @@ export async function emitSessionUnboundLifecycleEvent(params: {
   emitHooks?: boolean;
 }) {
   const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  unbindThreadBindingsBySessionKey({
+  const channelRuntime = getChannelRuntime();
+  channelRuntime.discord.threadBindings.unbindBySessionKey({
     targetSessionKey: params.targetSessionKey,
     targetKind,
     reason: params.reason,
@@ -312,7 +294,11 @@ export async function performGatewaySessionReset(params: {
   let oldSessionId: string | undefined;
   let oldSessionFile: string | undefined;
   const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key: params.key, store });
+    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      cfg,
+      key: params.key,
+      store,
+    });
     const currentEntry = store[primaryKey];
     const resetEntry = stripRuntimeModelState(currentEntry);
     const parsed = parseAgentSessionKey(primaryKey);
@@ -327,6 +313,7 @@ export async function performGatewaySessionReset(params: {
       systemSent: false,
       abortedLastRun: false,
       thinkingLevel: currentEntry?.thinkingLevel,
+      fastMode: currentEntry?.fastMode,
       verboseLevel: currentEntry?.verboseLevel,
       reasoningLevel: currentEntry?.reasoningLevel,
       responseUsage: currentEntry?.responseUsage,
@@ -338,6 +325,8 @@ export async function performGatewaySessionReset(params: {
       origin: snapshotSessionOrigin(currentEntry),
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
+      lastAccountId: currentEntry?.lastAccountId,
+      lastThreadId: currentEntry?.lastThreadId,
       skillsSnapshot: currentEntry?.skillsSnapshot,
       inputTokens: 0,
       outputTokens: 0,

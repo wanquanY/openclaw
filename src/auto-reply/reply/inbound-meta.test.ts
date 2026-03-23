@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 
@@ -111,7 +112,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct webchat chats", () => {
+  it("keeps message identifiers for direct webchat chats routed through OriginatingChannel", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "webchat",
@@ -119,7 +120,9 @@ describe("buildInboundUserContextPrefix", () => {
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
-    expect(text).toBe("");
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBe("provider-full-id");
   });
 
   it("keeps message identifiers for webchat direct chats", () => {
@@ -203,6 +206,25 @@ describe("buildInboundUserContextPrefix", () => {
     expect(conversationInfo["timestamp"]).toEqual(expect.any(String));
   });
 
+  it("honors envelope user timezone for conversation timestamps", () => {
+    withEnv({ TZ: "America/Los_Angeles" }, () => {
+      const text = buildInboundUserContextPrefix(
+        {
+          ChatType: "group",
+          MessageSid: "msg-with-user-tz",
+          Timestamp: Date.UTC(2026, 2, 19, 0, 0),
+        } as TemplateContext,
+        {
+          timezone: "user",
+          userTimezone: "Asia/Tokyo",
+        },
+      );
+
+      const conversationInfo = parseConversationInfoPayload(text);
+      expect(conversationInfo["timestamp"]).toBe("Thu 2026-03-19 09:00 GMT+9");
+    });
+  });
+
   it("omits invalid timestamps instead of throwing", () => {
     expect(() =>
       buildInboundUserContextPrefix({
@@ -241,7 +263,7 @@ describe("buildInboundUserContextPrefix", () => {
 
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
+    expect(conversationInfo["message_id_full"]).toBe("full-provider-message-id");
   });
 
   it("falls back to MessageSidFull when MessageSid is missing", () => {
