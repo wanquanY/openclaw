@@ -293,6 +293,42 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns instead of failing when optional bundled plugin ids are missing from this build", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: false,
+          allow: ["whatsapp"],
+          deny: ["matrix"],
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: "plugins.allow",
+            message:
+              "plugin not found: whatsapp (optional bundled plugin unavailable in this build; stale config entry ignored)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin not found: matrix (optional bundled plugin unavailable in this build; stale config entry ignored)",
+          },
+        ]),
+      );
+    }
+  });
+
   it("warns for removed google gemini auth plugin ids instead of failing validation", async () => {
     const removedId = "google-gemini-cli-auth";
     const res = validateInSuite({

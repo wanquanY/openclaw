@@ -1,4 +1,5 @@
 import { pathToFileURL } from "node:url";
+import { checkBundledPluginRuntimeIntegrity } from "./check-bundled-plugin-runtime-integrity.mjs";
 import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
 import { stageBundledPluginRuntimeDeps } from "./stage-bundled-plugin-runtime-deps.mjs";
@@ -9,6 +10,7 @@ export function runRuntimePostBuild(params = {}) {
   copyBundledPluginMetadata(params);
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);
+  checkBundledPluginRuntimeIntegrity(params);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

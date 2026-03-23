@@ -34,6 +34,37 @@ function rewritePackageEntry(entry) {
   return `./${rewritten}`;
 }
 
+function normalizePackageRuntimeEntry(entry) {
+  return String(entry || "").replace(/^\.\//u, "");
+}
+
+function listDeclaredBundledRuntimeEntries(packageJson) {
+  if (!packageJson?.openclaw) {
+    return [];
+  }
+  const entries = [
+    ...(rewritePackageExtensions(packageJson.openclaw.extensions) ?? []),
+    ...(typeof packageJson.openclaw.setupEntry === "string"
+      ? [rewritePackageEntry(packageJson.openclaw.setupEntry)]
+      : []),
+  ]
+    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+    .map((entry) => normalizePackageRuntimeEntry(entry));
+  return Array.from(new Set(entries));
+}
+
+function listMissingBundledRuntimeEntries(distPluginDir, packageJson) {
+  const declaredEntries = listDeclaredBundledRuntimeEntries(packageJson);
+  return declaredEntries.filter((entry) => {
+    const candidatePath = ensurePathInsideRoot(distPluginDir, entry);
+    try {
+      return !fs.statSync(candidatePath).isFile();
+    } catch {
+      return true;
+    }
+  });
+}
+
 function ensurePathInsideRoot(rootDir, rawPath) {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -189,6 +220,17 @@ export function copyBundledPluginMetadata(params = {}) {
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const packageJson = fs.existsSync(packageJsonPath)
+      ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
+      : null;
+    const missingRuntimeEntries = packageJson
+      ? listMissingBundledRuntimeEntries(distPluginDir, packageJson)
+      : [];
+    if (missingRuntimeEntries.length > 0) {
+      removePathIfExists(distPluginDir);
+      continue;
+    }
     // Generated skill assets live under a dedicated dist-owned directory. Also
     // remove the older bad node_modules tree so release packs cannot pick it up.
     removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
@@ -204,13 +246,11 @@ export function copyBundledPluginMetadata(params = {}) {
       : manifest;
     writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
 
-    const packageJsonPath = path.join(pluginDir, "package.json");
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
 
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
     if (packageJson.openclaw && "extensions" in packageJson.openclaw) {
       packageJson.openclaw = {
         ...packageJson.openclaw,

@@ -13,9 +13,123 @@
 
 确认上游同步没有把本地定制功能静默覆盖、删掉，或者改出行为回归。
 
+## 推荐同步流程
+
+建议不要在日常开发分支上直接同步上游，先切到专门的同步分支处理。
+
+### 1. 先拉取上游最新代码
+
+先确认远端存在 `upstream`，然后只拉远端引用，不要一上来就在当前工作分支直接 `pull --rebase`：
+
+```sh
+git remote -v
+git fetch upstream
+git log --oneline --decorate -n 20 upstream/main
+```
+
+如果你习惯先把上游主线单独更新到一个本地跟踪分支，也可以显式执行：
+
+```sh
+git checkout upstream
+git pull --ff-only
+```
+
+但不管用哪种方式，核心目标都一样：
+
+- 先拿到最新的 `upstream/main`
+- 先看清这次上游到底更新了什么
+- 不要在还没评估风险前，就把上游改动直接压到本地稳定分支
+
+### 2. 切到专门处理同步的本地分支
+
+推荐把同步工作放在单独分支，例如：
+
+```sh
+git checkout codex/sync-upstream-main-YYYYMMDD
+```
+
+如果这个分支还不存在，就从你当前要保护的本地主线拉一个新分支出来：
+
+```sh
+git checkout -b codex/sync-upstream-main-YYYYMMDD
+```
+
+这里的基线通常应该是你当前真正要保留本地能力的分支，例如本地 `prod` 或你自己的稳定分支，而不是盲目从 `upstream/main` 起新分支。
+
+### 3. 合并上游到同步分支
+
+在同步分支上执行：
+
+```sh
+git merge upstream/main
+```
+
+如果你已经有一个本地 `upstream` 跟踪分支，并且它已经快进到最新上游，也可以合并那个本地分支：
+
+```sh
+git merge upstream
+```
+
+注意：
+
+- 不要把“没有冲突”等同于“没有回归”
+- 即使自动 merge 成功，也必须继续做下面的历史范围、重叠范围、语义范围和验证范围检查
+- 如果出现冲突，优先保留本地定制功能语义，再吸收上游结构调整，不要机械地选 `ours` 或 `theirs`
+
+### 4. 解决冲突后，立刻按这份清单做检查
+
+推荐顺序：
+
+1. 先做下面的 A / B 范围检查，确认这次真正要保护的本地提交和高风险文件
+2. 再做 C 语义检查，确认关键功能标记没有被静默吃掉
+3. 最后跑 D 里的测试和构建
+
+如果检查没做完，不要急着把同步分支合回本地稳定分支。
+
 ## 本地实现功能清单
 
 每次同步后都要检查下面这些模块。以后如果本地又新增了新的定制功能，也要及时补进这份文档。
+
+### 0. Bundled runtime / optional plugins 一致性
+
+涉及文件：
+
+- `scripts/copy-bundled-plugin-metadata.mjs`
+- `scripts/check-bundled-plugin-runtime-integrity.mjs`
+- `scripts/runtime-postbuild.mjs`
+- `scripts/lib/optional-bundled-clusters.mjs`
+- `tsdown.config.ts`
+- `src/plugins/bundled-compat.ts`
+- `src/config/validation.ts`
+- `src/plugins/copy-bundled-plugin-metadata.test.ts`
+- `src/config/config.plugin-validation.test.ts`
+
+必须确认：
+
+- `dist/extensions` 和 `dist-runtime/extensions` 中，不能出现只带 `package.json / openclaw.plugin.json`，却没有
+  `index.js / setup-entry.js` 的 metadata-only 假插件目录
+- optional bundled plugins 如果本次 build 没有实际产出，就不能被 stage 进 `dist/extensions`
+- runtime postbuild 之后仍然会执行 bundled plugin runtime 完整性校验，声明的入口文件缺失时必须直接 fail build
+- `plugins.allow / plugins.deny` 中残留的 optional bundled plugin ids，如果当前 build 没带该插件，只能 warning，不能阻断 gateway 启动
+- 测试仍然覆盖：
+  - 缺失运行时入口时不 stage metadata
+  - optional bundled plugin 缺失时只 warning
+
+背景：
+
+- 这是 2026-03-23 在 `video_workflow` 集成最新 OpenClaw 后定位出的根因修复
+- 旧问题表现为：
+  - `extension entry escapes package directory: ./index.js`
+  - `plugins.allow: plugin not found: whatsapp/googlechat/...`
+  - 打包产物 notarization 通过，但 app 启动后 gateway 直接退出
+
+下游集成约束：
+
+- `video_workflow` 侧不会再写死旧渠道插件清单，而是按 bundled runtime 实际扫描到的 channel plugins 生成 `plugins.allow`
+- 如果以后这里的 bundled runtime 行为再次变化，同步上游后除了跑 OpenClaw 自身验证，还要回归验证：
+  - `/Users/yangwanquan/Personal_projects/AIGC_dev/video_workflow/front/src-tauri/src/openclaw/server/config.rs`
+  - `/Users/yangwanquan/Personal_projects/AIGC_dev/video_workflow/front/scripts/verify-runtime-resources.mjs`
+  - `/Users/yangwanquan/Personal_projects/AIGC_dev/video_workflow/front/scripts/prepare-openclaw-runtime-local.mjs`
 
 ### 1. Gateway 会话事件订阅
 

@@ -20,6 +20,21 @@ function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+function writeBuiltRuntimeEntries(params: {
+  repoRoot: string;
+  pluginId: string;
+  entries: readonly string[];
+}): void {
+  const distPluginDir = path.join(params.repoRoot, "dist", "extensions", params.pluginId);
+  for (const entry of params.entries) {
+    const normalizedEntry = String(entry || "").replace(/^\.\//u, "");
+    fs.mkdirSync(path.dirname(path.join(distPluginDir, normalizedEntry)), {
+      recursive: true,
+    });
+    fs.writeFileSync(path.join(distPluginDir, normalizedEntry), "export default {};\n", "utf8");
+  }
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -53,6 +68,11 @@ describe("copyBundledPluginMetadata", () => {
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/acpx",
       openclaw: { extensions: ["./index.ts"] },
+    });
+    writeBuiltRuntimeEntries({
+      repoRoot,
+      pluginId: "acpx",
+      entries: ["./index.js"],
     });
 
     copyBundledPluginMetadata({ repoRoot });
@@ -114,6 +134,11 @@ describe("copyBundledPluginMetadata", () => {
       name: "@openclaw/tlon",
       openclaw: { extensions: ["./index.ts"] },
     });
+    writeBuiltRuntimeEntries({
+      repoRoot,
+      pluginId: "tlon",
+      entries: ["./index.js"],
+    });
     const staleNodeModulesSkillDir = path.join(
       repoRoot,
       "dist",
@@ -168,6 +193,11 @@ describe("copyBundledPluginMetadata", () => {
       name: "@openclaw/tlon",
       openclaw: { extensions: ["./index.ts"] },
     });
+    writeBuiltRuntimeEntries({
+      repoRoot,
+      pluginId: "tlon",
+      entries: ["./index.js"],
+    });
 
     copyBundledPluginMetadata({ repoRoot });
 
@@ -207,6 +237,11 @@ describe("copyBundledPluginMetadata", () => {
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/tlon",
       openclaw: { extensions: ["./index.ts"] },
+    });
+    writeBuiltRuntimeEntries({
+      repoRoot,
+      pluginId: "tlon",
+      entries: ["./index.js"],
     });
     const staleBundledSkillDir = path.join(
       repoRoot,
@@ -250,6 +285,11 @@ describe("copyBundledPluginMetadata", () => {
     writeJson(path.join(pluginDir, "package.json"), {
       name: "@openclaw/diffs",
       openclaw: { extensions: ["./index.ts"] },
+    });
+    writeBuiltRuntimeEntries({
+      repoRoot,
+      pluginId: "diffs",
+      entries: ["./index.js"],
     });
 
     const realCpSync = fs.cpSync.bind(fs);
@@ -333,6 +373,46 @@ describe("copyBundledPluginMetadata", () => {
     writeJson(path.join(staleDistDir, "package.json"), {
       name: "@openclaw/google-gemini-cli-auth",
     });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
+  });
+
+  it("does not stage metadata for plugins whose declared built entries are absent", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-missing-runtime-entry-");
+    const pluginDir = path.join(repoRoot, "extensions", "whatsapp");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+      id: "whatsapp",
+      configSchema: { type: "object" },
+    });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/whatsapp",
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+      },
+    });
+
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "openclaw.plugin.json"), "{}\n", "utf8");
+    fs.writeFileSync(
+      path.join(staleDistDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/whatsapp",
+          openclaw: {
+            extensions: ["./index.js"],
+            setupEntry: "./setup-entry.js",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     copyBundledPluginMetadata({ repoRoot });
 

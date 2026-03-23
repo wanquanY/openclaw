@@ -1,6 +1,25 @@
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import type { PluginLoadOptions } from "./loader.js";
 
+const OPTIONAL_BUNDLED_PLUGIN_IDS = new Set([
+  "acpx",
+  "diagnostics-otel",
+  "diffs",
+  "googlechat",
+  "matrix",
+  "memory-lancedb",
+  "msteams",
+  "nostr",
+  "tlon",
+  "twitch",
+  "whatsapp",
+  "zalouser",
+]);
+
+export function isOptionalBundledPluginId(pluginId: string): boolean {
+  return OPTIONAL_BUNDLED_PLUGIN_IDS.has(String(pluginId || "").trim());
+}
+
 export function withBundledPluginAllowlistCompat(params: {
   config: PluginLoadOptions["config"];
   pluginIds: readonly string[];
