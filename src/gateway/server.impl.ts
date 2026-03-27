@@ -869,19 +869,37 @@ export async function startGatewayServer(
         const messageSeq = entry?.sessionId
           ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
           : undefined;
-        const sessionRow = loadGatewaySessionRow(sessionKey);
+        const sessionRow = loadGatewaySessionRow(sessionKey, {
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+          includeTitleMetadata: true,
+          includePreviewText: true,
+          includeLineage: true,
+        });
         const sessionSnapshot = sessionRow
           ? {
               session: sessionRow,
               updatedAt: sessionRow.updatedAt ?? undefined,
               sessionId: sessionRow.sessionId,
               kind: sessionRow.kind,
+              threadId: sessionRow.threadId,
+              title: sessionRow.title,
+              fallbackTitle: sessionRow.fallbackTitle,
+              titleSource: sessionRow.titleSource,
+              titleStatus: sessionRow.titleStatus,
+              titleLocked: sessionRow.titleLocked,
+              titleBasisMessageId: sessionRow.titleBasisMessageId,
+              titleGeneratedAt: sessionRow.titleGeneratedAt,
               channel: sessionRow.channel,
               label: sessionRow.label,
               displayName: sessionRow.displayName,
+              derivedTitle: sessionRow.derivedTitle,
+              lastMessagePreview: sessionRow.lastMessagePreview,
+              previewText: sessionRow.previewText,
               deliveryContext: sessionRow.deliveryContext,
               parentSessionKey: sessionRow.parentSessionKey,
               childSessions: sessionRow.childSessions,
+              previousSessions: sessionRow.previousSessions,
               thinkingLevel: sessionRow.thinkingLevel,
               systemSent: sessionRow.systemSent,
               abortedLastRun: sessionRow.abortedLastRun,
@@ -942,7 +960,13 @@ export async function startGatewayServer(
         if (connIds.size === 0) {
           return;
         }
-        const sessionRow = loadGatewaySessionRow(event.sessionKey);
+        const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+          includeTitleMetadata: true,
+          includePreviewText: true,
+          includeLineage: true,
+        });
         broadcastToConnIds(
           "sessions.changed",
           {
@@ -957,12 +981,24 @@ export async function startGatewayServer(
                   updatedAt: sessionRow.updatedAt ?? undefined,
                   sessionId: sessionRow.sessionId,
                   kind: sessionRow.kind,
+                  threadId: sessionRow.threadId,
+                  title: sessionRow.title,
+                  fallbackTitle: sessionRow.fallbackTitle,
+                  titleSource: sessionRow.titleSource,
+                  titleStatus: sessionRow.titleStatus,
+                  titleLocked: sessionRow.titleLocked,
+                  titleBasisMessageId: sessionRow.titleBasisMessageId,
+                  titleGeneratedAt: sessionRow.titleGeneratedAt,
                   channel: sessionRow.channel,
                   label: event.label ?? sessionRow.label,
                   displayName: event.displayName ?? sessionRow.displayName,
+                  derivedTitle: sessionRow.derivedTitle,
+                  lastMessagePreview: sessionRow.lastMessagePreview,
+                  previewText: sessionRow.previewText,
                   deliveryContext: sessionRow.deliveryContext,
                   parentSessionKey: event.parentSessionKey ?? sessionRow.parentSessionKey,
                   childSessions: sessionRow.childSessions,
+                  previousSessions: sessionRow.previousSessions,
                   thinkingLevel: sessionRow.thinkingLevel,
                   systemSent: sessionRow.systemSent,
                   abortedLastRun: sessionRow.abortedLastRun,

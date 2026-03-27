@@ -629,7 +629,13 @@ export function createAgentEventHandler({
 }: AgentEventHandlerOptions) {
   const sessionSubscriptions = sessionEventSubscriptions;
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
-    const row = loadGatewaySessionRow(sessionKey);
+    const row = loadGatewaySessionRow(sessionKey, {
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      includeTitleMetadata: true,
+      includePreviewText: true,
+      includeLineage: true,
+    });
     const lifecyclePatch = evt
       ? deriveGatewaySessionLifecycleSnapshot({
           session: row
@@ -649,6 +655,18 @@ export function createAgentEventHandler({
     const snapshotSource = session ?? lifecyclePatch;
     return {
       ...(session ? { session } : {}),
+      threadId: row?.threadId,
+      title: row?.title,
+      fallbackTitle: row?.fallbackTitle,
+      titleSource: row?.titleSource,
+      titleStatus: row?.titleStatus,
+      titleLocked: row?.titleLocked,
+      titleBasisMessageId: row?.titleBasisMessageId,
+      titleGeneratedAt: row?.titleGeneratedAt,
+      derivedTitle: row?.derivedTitle,
+      lastMessagePreview: row?.lastMessagePreview,
+      previewText: row?.previewText,
+      previousSessions: row?.previousSessions,
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
       contextTokens: row?.contextTokens,

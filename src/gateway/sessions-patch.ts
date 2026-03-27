@@ -84,6 +84,14 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+function normalizeOptionalTrimmedString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed || undefined;
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -211,6 +219,109 @@ export async function applySessionsPatchToStore(params: {
         return invalid("subagentControlScope cannot be changed once set");
       }
       next.subagentControlScope = normalized;
+    }
+  }
+
+  if ("threadId" in patch) {
+    const raw = patch.threadId;
+    if (raw === null) {
+      if (existing?.threadId) {
+        return invalid("threadId cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      const normalized = normalizeOptionalTrimmedString(raw);
+      if (!normalized) {
+        return invalid("invalid threadId: empty");
+      }
+      if (existing?.threadId && existing.threadId !== normalized) {
+        return invalid("threadId cannot be changed once set");
+      }
+      next.threadId = normalized;
+    }
+  }
+
+  if ("title" in patch) {
+    const raw = patch.title;
+    if (raw === null) {
+      delete next.title;
+    } else if (raw !== undefined) {
+      const normalized = normalizeOptionalTrimmedString(raw);
+      if (!normalized) {
+        return invalid("invalid title: empty");
+      }
+      next.title = normalized;
+      if (!("titleSource" in patch)) {
+        next.titleSource = "manual";
+      }
+      if (!("titleStatus" in patch)) {
+        next.titleStatus = "ready";
+      }
+    }
+  }
+
+  if ("fallbackTitle" in patch) {
+    const raw = patch.fallbackTitle;
+    if (raw === null) {
+      delete next.fallbackTitle;
+    } else if (raw !== undefined) {
+      const normalized = normalizeOptionalTrimmedString(raw);
+      if (!normalized) {
+        return invalid("invalid fallbackTitle: empty");
+      }
+      next.fallbackTitle = normalized;
+    }
+  }
+
+  if ("titleSource" in patch) {
+    const raw = patch.titleSource;
+    if (raw === null) {
+      delete next.titleSource;
+    } else if (raw !== undefined) {
+      next.titleSource = raw;
+    }
+  }
+
+  if ("titleStatus" in patch) {
+    const raw = patch.titleStatus;
+    if (raw === null) {
+      delete next.titleStatus;
+    } else if (raw !== undefined) {
+      next.titleStatus = raw;
+    }
+  }
+
+  if ("titleLocked" in patch) {
+    const raw = patch.titleLocked;
+    if (raw === null) {
+      delete next.titleLocked;
+    } else if (raw !== undefined) {
+      next.titleLocked = raw;
+    }
+  }
+
+  if ("titleBasisMessageId" in patch) {
+    const raw = patch.titleBasisMessageId;
+    if (raw === null) {
+      delete next.titleBasisMessageId;
+    } else if (raw !== undefined) {
+      const normalized = normalizeOptionalTrimmedString(raw);
+      if (!normalized) {
+        return invalid("invalid titleBasisMessageId: empty");
+      }
+      next.titleBasisMessageId = normalized;
+    }
+  }
+
+  if ("titleGeneratedAt" in patch) {
+    const raw = patch.titleGeneratedAt;
+    if (raw === null) {
+      delete next.titleGeneratedAt;
+    } else if (raw !== undefined) {
+      const numeric = Number(raw);
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        return invalid("invalid titleGeneratedAt (use an integer >= 0)");
+      }
+      next.titleGeneratedAt = Math.floor(numeric);
     }
   }
 
