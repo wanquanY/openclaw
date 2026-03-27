@@ -1024,6 +1024,9 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeTitleMetadata?: boolean;
+  includePreviewText?: boolean;
+  includeLineage?: boolean;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1112,18 +1115,30 @@ export function buildGatewaySessionRow(params: {
 
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
-  if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
+  let previewText: string | undefined;
+  let fallbackTitle = entry?.fallbackTitle;
+  if (
+    entry?.sessionId &&
+    (params.includeDerivedTitles ||
+      params.includeLastMessage ||
+      params.includeTitleMetadata ||
+      params.includePreviewText)
+  ) {
     const fields = readSessionTitleFieldsFromTranscript(
       entry.sessionId,
       storePath,
       entry.sessionFile,
       sessionAgentId,
     );
-    if (params.includeDerivedTitles) {
+    if (params.includeDerivedTitles || params.includeTitleMetadata) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
+      if (!fallbackTitle) {
+        fallbackTitle = derivedTitle;
+      }
     }
-    if (params.includeLastMessage && fields.lastMessagePreview) {
+    if ((params.includeLastMessage || params.includePreviewText) && fields.lastMessagePreview) {
       lastMessagePreview = fields.lastMessagePreview;
+      previewText = fields.lastMessagePreview;
     }
   }
 
@@ -1131,10 +1146,20 @@ export function buildGatewaySessionRow(params: {
     key,
     spawnedBy: entry?.spawnedBy,
     kind: classifySessionKey(key, entry),
+    threadId: entry?.threadId,
+    title: entry?.title,
+    fallbackTitle,
+    titleSource: entry?.titleSource,
+    titleStatus: entry?.titleStatus,
+    titleLocked: entry?.titleLocked,
+    titleBasisMessageId: entry?.titleBasisMessageId,
+    titleGeneratedAt: entry?.titleGeneratedAt,
     label: entry?.label,
     displayName,
     derivedTitle,
     lastMessagePreview,
+    previewText,
+    previousSessions: params.includeLineage ? entry?.previousSessions : undefined,
     channel,
     subject,
     groupChannel,
@@ -1174,7 +1199,14 @@ export function buildGatewaySessionRow(params: {
 
 export function loadGatewaySessionRow(
   sessionKey: string,
-  options?: { includeDerivedTitles?: boolean; includeLastMessage?: boolean; now?: number },
+  options?: {
+    includeDerivedTitles?: boolean;
+    includeLastMessage?: boolean;
+    includeTitleMetadata?: boolean;
+    includePreviewText?: boolean;
+    includeLineage?: boolean;
+    now?: number;
+  },
 ): GatewaySessionRow | null {
   const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
   if (!entry) {
@@ -1189,6 +1221,9 @@ export function loadGatewaySessionRow(
     now: options?.now,
     includeDerivedTitles: options?.includeDerivedTitles,
     includeLastMessage: options?.includeLastMessage,
+    includeTitleMetadata: options?.includeTitleMetadata,
+    includePreviewText: options?.includePreviewText,
+    includeLineage: options?.includeLineage,
   });
 }
 
@@ -1204,7 +1239,10 @@ export function listSessionsFromStore(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeTitleMetadata = opts.includeTitleMetadata === true;
   const includeLastMessage = opts.includeLastMessage === true;
+  const includePreviewText = opts.includePreviewText === true;
+  const includeLineage = opts.includeLineage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = typeof opts.label === "string" ? opts.label.trim() : "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
@@ -1262,6 +1300,9 @@ export function listSessionsFromStore(params: {
         now,
         includeDerivedTitles,
         includeLastMessage,
+        includeTitleMetadata,
+        includePreviewText,
+        includeLineage,
       }),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

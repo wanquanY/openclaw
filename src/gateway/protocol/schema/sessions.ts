@@ -12,11 +12,14 @@ export const SessionsListParamsSchema = Type.Object(
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeDerivedTitles: Type.Optional(Type.Boolean()),
+    includeTitleMetadata: Type.Optional(Type.Boolean()),
     /**
      * Read last 16KB of each session transcript to extract most recent message preview.
      * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeLastMessage: Type.Optional(Type.Boolean()),
+    includePreviewText: Type.Optional(Type.Boolean()),
+    includeLineage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
@@ -54,6 +57,9 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    threadId: Type.Optional(NonEmptyString),
+    title: Type.Optional(Type.String()),
+    titleLocked: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -98,6 +104,30 @@ export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    threadId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    title: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    fallbackTitle: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    titleSource: Type.Optional(
+      Type.Union([
+        Type.Literal("manual"),
+        Type.Literal("cloud_generated"),
+        Type.Literal("fallback"),
+        Type.Literal("imported"),
+        Type.Null(),
+      ]),
+    ),
+    titleStatus: Type.Optional(
+      Type.Union([
+        Type.Literal("pending"),
+        Type.Literal("ready"),
+        Type.Literal("failed"),
+        Type.Literal("stale"),
+        Type.Null(),
+      ]),
+    ),
+    titleLocked: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    titleBasisMessageId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    titleGeneratedAt: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

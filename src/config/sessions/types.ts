@@ -177,6 +177,14 @@ export type SessionEntry = {
   memoryFlushCompactionCount?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
+  threadId?: string;
+  title?: string;
+  fallbackTitle?: string;
+  titleSource?: "manual" | "cloud_generated" | "fallback" | "imported";
+  titleStatus?: "pending" | "ready" | "failed" | "stale";
+  titleLocked?: boolean;
+  titleBasisMessageId?: string;
+  titleGeneratedAt?: number;
   label?: string;
   displayName?: string;
   channel?: string;

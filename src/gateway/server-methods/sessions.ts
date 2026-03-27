@@ -136,7 +136,15 @@ function emitSessionsChanged(
   if (connIds.size === 0) {
     return;
   }
-  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
+  const sessionRow = payload.sessionKey
+    ? loadGatewaySessionRow(payload.sessionKey, {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+        includeTitleMetadata: true,
+        includePreviewText: true,
+        includeLineage: true,
+      })
+    : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
@@ -147,12 +155,24 @@ function emitSessionsChanged(
             updatedAt: sessionRow.updatedAt ?? undefined,
             sessionId: sessionRow.sessionId,
             kind: sessionRow.kind,
+            threadId: sessionRow.threadId,
+            title: sessionRow.title,
+            fallbackTitle: sessionRow.fallbackTitle,
+            titleSource: sessionRow.titleSource,
+            titleStatus: sessionRow.titleStatus,
+            titleLocked: sessionRow.titleLocked,
+            titleBasisMessageId: sessionRow.titleBasisMessageId,
+            titleGeneratedAt: sessionRow.titleGeneratedAt,
             channel: sessionRow.channel,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
+            derivedTitle: sessionRow.derivedTitle,
+            lastMessagePreview: sessionRow.lastMessagePreview,
+            previewText: sessionRow.previewText,
             deliveryContext: sessionRow.deliveryContext,
             parentSessionKey: sessionRow.parentSessionKey,
             childSessions: sessionRow.childSessions,
+            previousSessions: sessionRow.previousSessions,
             thinkingLevel: sessionRow.thinkingLevel,
             systemSent: sessionRow.systemSent,
             abortedLastRun: sessionRow.abortedLastRun,
@@ -726,6 +746,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           key: target.canonicalKey,
           label: typeof p.label === "string" ? p.label.trim() : undefined,
           model: typeof p.model === "string" ? p.model.trim() : undefined,
+          threadId: typeof p.threadId === "string" ? p.threadId.trim() : undefined,
+          title: typeof p.title === "string" ? p.title.trim() : undefined,
+          titleLocked: typeof p.titleLocked === "boolean" ? p.titleLocked : undefined,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
