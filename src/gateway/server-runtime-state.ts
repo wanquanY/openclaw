@@ -6,7 +6,9 @@ import type { CliDeps } from "../cli/deps.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
+  pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
@@ -65,6 +67,7 @@ export async function createGatewayRuntimeState(params: {
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
+  pinChannelRegistry?: boolean;
   deps: CliDeps;
   canvasRuntime: RuntimeEnv;
   canvasHostEnabled: boolean;
@@ -89,6 +92,7 @@ export async function createGatewayRuntimeState(params: {
   chatRunState: ReturnType<typeof createChatRunState>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatDeltaLastBroadcastLen: Map<string, number>;
   addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
   removeChatRun: (
     sessionId: string,
@@ -100,6 +104,11 @@ export async function createGatewayRuntimeState(params: {
   sessionEventSubscriptions: ReturnType<typeof createSessionEventSubscriptionRegistry>;
 }> {
   pinActivePluginHttpRouteRegistry(params.pluginRegistry);
+  if (params.pinChannelRegistry !== false) {
+    pinActivePluginChannelRegistry(params.pluginRegistry);
+  } else {
+    releasePinnedPluginChannelRegistry();
+  }
   try {
     let canvasHost: CanvasHostHandler | null = null;
     if (params.canvasHostEnabled) {
@@ -223,6 +232,7 @@ export async function createGatewayRuntimeState(params: {
     const chatRunRegistry = chatRunState.registry;
     const chatRunBuffers = chatRunState.buffers;
     const chatDeltaSentAt = chatRunState.deltaSentAt;
+    const chatDeltaLastBroadcastLen = chatRunState.deltaLastBroadcastLen;
     const addChatRun = chatRunRegistry.add;
     const removeChatRun = chatRunRegistry.remove;
     const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -231,7 +241,15 @@ export async function createGatewayRuntimeState(params: {
 
     return {
       canvasHost,
-      releasePluginRouteRegistry: () => releasePinnedPluginHttpRouteRegistry(params.pluginRegistry),
+      releasePluginRouteRegistry: () => {
+        // Releases both pinned HTTP-route and channel registries set at startup.
+        releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+        // Release unconditionally (no registry arg): the channel pin may have
+        // been re-pinned to a deferred-reload registry that differs from the
+        // original params.pluginRegistry, so an identity-guarded release would
+        // be a no-op and leak the pin across in-process restarts.
+        releasePinnedPluginChannelRegistry();
+      },
       httpServer,
       httpServers,
       httpBindHosts,
@@ -244,6 +262,7 @@ export async function createGatewayRuntimeState(params: {
       chatRunState,
       chatRunBuffers,
       chatDeltaSentAt,
+      chatDeltaLastBroadcastLen,
       addChatRun,
       removeChatRun,
       chatAbortControllers,
@@ -252,6 +271,7 @@ export async function createGatewayRuntimeState(params: {
     };
   } catch (err) {
     releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+    releasePinnedPluginChannelRegistry();
     throw err;
   }
 }

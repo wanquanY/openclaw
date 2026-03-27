@@ -71,6 +71,13 @@ export type SessionPreviousSession = {
   updatedAt?: number;
 };
 
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -175,7 +182,9 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   threadId?: string;
   title?: string;
