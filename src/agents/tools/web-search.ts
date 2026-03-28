@@ -3,9 +3,11 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { resolveBundledWebSearchPluginId } from "../../plugins/bundled-web-search-provider-ids.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { resolveWebSearchDefinition } from "../../web-search/runtime.js";
 import { normalizeXaiModelId } from "../model-id-normalization.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
@@ -20,7 +22,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -1838,23 +1839,30 @@ async function runWebSearch(params: {
       body.tbs = tbs;
     }
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": params.apiKey,
+    const data = await withTrustedWebToolsEndpoint(
+      {
+        url: endpoint,
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-KEY": params.apiKey,
+          },
+          body: JSON.stringify(body),
+        },
       },
-      body: JSON.stringify(body),
-      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-    });
-
-    if (!res.ok) {
-      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-      const detail = detailResult.text;
-      throw new Error(`Serper API error (${res.status}): ${detail || res.statusText}`);
-    }
-
-    const data = (await res.json()) as SerperSearchResponse;
+      async ({ response }) => {
+        if (!response.ok) {
+          const detailResult = await readResponseText(response, { maxBytes: 64_000 });
+          const detail = detailResult.text;
+          throw new Error(
+            `Serper API error (${response.status}): ${detail || response.statusText}`,
+          );
+        }
+        return (await response.json()) as SerperSearchResponse;
+      },
+    );
     const results = Array.isArray(data.organic) ? data.organic : [];
     const mapped = results.map((entry) => {
       const description = entry.snippet ?? "";
@@ -2068,6 +2076,43 @@ export function createWebSearchTool(options?: {
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
   if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
+    return null;
+  }
+
+  const runtimeProviderId =
+    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
+  const configuredProviderId =
+    search && "provider" in search && typeof search.provider === "string"
+      ? search.provider.trim().toLowerCase()
+      : "";
+  const externalProviderId =
+    (runtimeProviderId && !isSearchProvider(runtimeProviderId) ? runtimeProviderId : undefined) ??
+    (configuredProviderId && !isSearchProvider(configuredProviderId)
+      ? configuredProviderId
+      : undefined);
+  if (externalProviderId) {
+    const resolved = resolveWebSearchDefinition({
+      ...options,
+      providerId: externalProviderId,
+      preferRuntimeProviders: true,
+    });
+    if (!resolved) {
+      return null;
+    }
+    return {
+      label: "Web Search",
+      name: "web_search",
+      description: resolved.definition.description,
+      parameters: resolved.definition.parameters,
+      execute: async (_toolCallId, args) => jsonResult(await resolved.definition.execute(args)),
+    };
+  }
+
+  if (
+    runtimeProviderId &&
+    !isSearchProvider(runtimeProviderId) &&
+    !resolveBundledWebSearchPluginId(runtimeProviderId)
+  ) {
     return null;
   }
 

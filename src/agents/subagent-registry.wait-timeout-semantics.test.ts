@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
 
@@ -54,6 +54,10 @@ const flushAsync = async () => {
 };
 
 describe("subagent registry wait timeout semantics", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
   afterEach(async () => {
     state.waitCalls = 0;
     state.waitResponses = [];
@@ -78,9 +82,10 @@ describe("subagent registry wait timeout semantics", () => {
     });
 
     await flushAsync();
-
-    expect(state.waitCalls).toBe(2);
-    expect(announceSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(state.waitCalls).toBe(2);
+      expect(announceSpy).toHaveBeenCalledTimes(1);
+    });
     const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
       outcome?: { status?: string };
     };
@@ -102,9 +107,10 @@ describe("subagent registry wait timeout semantics", () => {
     });
 
     await flushAsync();
-
-    expect(state.waitCalls).toBe(1);
-    expect(announceSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(state.waitCalls).toBe(1);
+      expect(announceSpy).toHaveBeenCalledTimes(1);
+    });
     const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as {
       outcome?: { status?: string };
     };

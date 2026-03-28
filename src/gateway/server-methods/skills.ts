@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { installSkillFromClawHub, updateSkillsFromClawHub } from "../../agents/skills-clawhub.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
@@ -123,13 +124,45 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const cfg = loadConfig();
+    const defaultWorkspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {
+      const p = params as {
+        source: "clawhub";
+        slug: string;
+        version?: string;
+        force?: boolean;
+      };
+      const result = await installSkillFromClawHub({
+        workspaceDir: defaultWorkspaceDirRaw,
+        slug: p.slug,
+        version: p.version,
+        force: Boolean(p.force),
+      });
+      respond(
+        result.ok,
+        result.ok
+          ? {
+              ok: true,
+              message: `Installed ${result.slug}@${result.version}`,
+              stdout: "",
+              stderr: "",
+              code: 0,
+              slug: result.slug,
+              version: result.version,
+              targetDir: result.targetDir,
+            }
+          : result,
+        result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.error),
+      );
+      return;
+    }
     const p = params as {
       name: string;
       installId: string;
       agentId?: string;
       timeoutMs?: number;
     };
-    const cfg = loadConfig();
     const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
     const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
     if (agentIdRaw) {
@@ -166,6 +199,54 @@ export const skillsHandlers: GatewayRequestHandlers = {
           ErrorCodes.INVALID_REQUEST,
           `invalid skills.update params: ${formatValidationErrors(validateSkillsUpdateParams.errors)}`,
         ),
+      );
+      return;
+    }
+    if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {
+      const p = params as {
+        source: "clawhub";
+        slug?: string;
+        all?: boolean;
+      };
+      if (!p.slug && !p.all) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, 'clawhub skills.update requires "slug" or "all"'),
+        );
+        return;
+      }
+      if (p.slug && p.all) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            'clawhub skills.update accepts either "slug" or "all", not both',
+          ),
+        );
+        return;
+      }
+      const cfg = loadConfig();
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        slug: p.slug,
+      });
+      const errors = results.filter((result) => !result.ok);
+      respond(
+        errors.length === 0,
+        {
+          ok: errors.length === 0,
+          skillKey: p.slug ?? "*",
+          config: {
+            source: "clawhub",
+            results,
+          },
+        },
+        errors.length === 0
+          ? undefined
+          : errorShape(ErrorCodes.UNAVAILABLE, errors.map((result) => result.error).join("; ")),
       );
       return;
     }

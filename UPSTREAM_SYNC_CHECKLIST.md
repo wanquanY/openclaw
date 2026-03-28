@@ -219,7 +219,24 @@ git merge upstream
 - ACP session 元数据和 runtime options 仍然能在 session entry 里表达
 - inbound metadata 的格式化逻辑仍然保留
 
-### 7. Web search 默认配置与 provider 参数透传
+### 7. Embedded streamFn 选择与 OpenAI WebSocket fallback
+
+涉及文件：
+
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/run/stream-selection.ts`
+- `src/agents/pi-embedded-runner/run/stream-selection.test.ts`
+- `src/agents/openai-ws-stream.ts`
+- `src/agents/openai-ws-stream.test.ts`
+
+必须确认：
+
+- embedded runner 默认路径仍然优先保留当前已经带认证的 `streamFn`，不要在无必要时回退到原始 `streamSimple`
+- 选择 OpenAI WebSocket 传输时，HTTP fallback 仍然会透传当前 authenticated `streamFn`
+- WebSocket 缺少独立 API key 时，只 warning 并继续使用当前 authenticated `streamFn`
+- `anthropic-vertex` 和 provider 自定义 stream 注册逻辑没有被静默覆盖
+
+### 8. Web search 默认配置、legacy Serper 兼容与 provider 参数透传
 
 涉及文件：
 
@@ -228,15 +245,24 @@ git merge upstream
 - `src/agents/tools/web-tools.enabled-defaults.test.ts`
 - `src/config/types.tools.ts`
 - `src/config/zod-schema.agent-runtime.ts`
+- `src/legacy-serper-web-search-provider.ts`
+- `src/plugins/legacy-bundled-web-search.ts`
+- `src/plugins/bundled-web-search.ts`
+- `src/plugins/bundled-web-search.test.ts`
+- `src/commands/onboard-search.test.ts`
+- `src/secrets/runtime-web-tools.test.ts`
 
 必须确认：
 
 - 本地默认 provider 逻辑仍然存在
 - Brave mode 相关处理仍然存在
 - Serper 仍然支持 `country` 和 `search_lang` 透传
+- legacy `serper` provider 仍然会出现在 provider 列表里，并写入 `tools.web.search.serper.apiKey`，而不是错误生成 plugin config
+- runtime metadata / warning 路径不会把已配置的 legacy `serper` 误判成 invalid autodetect
+- Serper 请求路径仍然通过受信任的 web tools endpoint 包装，而不是裸 `fetch`
 - runtime config 和 schema 仍然暴露本地 web-search 设置
 
-### 8. Session rollover 历史保留
+### 9. Session rollover 历史保留
 
 涉及文件：
 
@@ -249,7 +275,7 @@ git merge upstream
 - 创建新 session 时仍然会保留 `previousSessions`
 - reset 或 freshness rollover 后，旧 session 链路仍然会正确写回
 
-### 9. 生成协议模型漂移
+### 10. 生成协议模型漂移
 
 涉及文件：
 
@@ -261,6 +287,21 @@ git merge upstream
 
 - 生成给客户端使用的协议模型，仍然覆盖本地依赖的 gateway / session 字段
 - 上游 schema 更新没有把下游客户端仍依赖的本地字段静默删掉
+
+### 11. Compaction / Skill SDK 合约漂移
+
+涉及文件：
+
+- `src/agents/compaction.ts`
+- `src/agents/pi-extensions/compaction-safeguard.ts`
+- `src/agents/skills/source.ts`
+
+必须确认：
+
+- `generateSummary(...)` 调用仍然按当前上游签名传参，`headers` 必须在 `signal` 前
+- compaction safeguard 仍然通过 `modelRegistry.getApiKeyAndHeaders(model)` 解析 request auth，并处理 `auth.ok === false` 分支
+- skill source 仍然从 `skill.sourceInfo.source` 读取，而不是访问已不存在的旧字段
+- 这些改动必须通过 `pnpm build`，因为只跑单测不一定能覆盖 `tsconfig.plugin-sdk.dts.json` 的编译面
 
 ## 每次同步必须检查的范围
 
@@ -300,7 +341,9 @@ rg -n "events\\.subscribe|eventsSubscribe|eventsUnsubscribe" src/gateway
 rg -n "sessions\\.files|listSessionFilesForGateway|trackSessionFilesForGateway" src/gateway
 rg -n "OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS|chat-assistant:" src/gateway/server-chat.ts
 rg -n "isolatedSession|SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS" src/infra src/agents
-rg -n "SERPER_API_KEY|serperBaseUrl|braveMode" src/agents/tools/web-search.ts
+rg -n "fallbackStreamFn|resolveEmbeddedRunStreamFn|shouldUseOpenAIWebSocketTransport" src/agents
+rg -n "SERPER_API_KEY|serperBaseUrl|braveMode|withTrustedWebToolsEndpoint|legacy-bundled-web-search" src/agents src/plugins src/flows
+rg -n "getApiKeyAndHeaders|sourceInfo\\.source|generateSummary\\(" src/agents
 ```
 
 ### D. 验证范围
@@ -310,7 +353,7 @@ rg -n "SERPER_API_KEY|serperBaseUrl|braveMode" src/agents/tools/web-search.ts
 核心同步回归测试：
 
 ```sh
-pnpm exec vitest run \
+pnpm test -- \
   src/gateway/server.health.test.ts \
   src/gateway/server.sessions.gateway-server-sessions-a.test.ts \
   src/gateway/server.chat.gateway-server-chat-b.test.ts \
@@ -318,14 +361,19 @@ pnpm exec vitest run \
   src/infra/heartbeat-runner.scheduler.test.ts \
   src/infra/heartbeat-runner.returns-default-unset.test.ts \
   src/agents/pi-embedded-runner/run/attempt.test.ts \
+  src/agents/pi-embedded-runner/run/stream-selection.test.ts \
+  src/agents/openai-ws-stream.test.ts \
   src/agents/tools/web-search.test.ts \
-  src/agents/tools/web-tools.enabled-defaults.test.ts
+  src/agents/tools/web-tools.enabled-defaults.test.ts \
+  src/plugins/bundled-web-search.test.ts \
+  src/commands/onboard-search.test.ts \
+  src/secrets/runtime-web-tools.test.ts
 ```
 
 本地功能保留测试：
 
 ```sh
-pnpm exec vitest run \
+pnpm test -- \
   src/gateway/server-chat.agent-events.test.ts \
   src/gateway/session-files.history.test.ts \
   src/agents/subagent-registry.wait-timeout-semantics.test.ts \

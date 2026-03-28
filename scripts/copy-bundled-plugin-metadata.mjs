@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import {
   removeFileIfExists,
   removePathIfExists,
@@ -194,8 +195,16 @@ function copyDeclaredPluginSkillPaths(params) {
   return copiedSkills;
 }
 
+/**
+ * @param {{
+ *   cwd?: string;
+ *   repoRoot?: string;
+ *   env?: NodeJS.ProcessEnv;
+ * }} [params]
+ */
 export function copyBundledPluginMetadata(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const env = params.env ?? process.env;
   const extensionsRoot = path.join(repoRoot, "extensions");
   const distExtensionsRoot = path.join(repoRoot, "dist", "extensions");
   if (!fs.existsSync(extensionsRoot)) {
@@ -207,11 +216,21 @@ export function copyBundledPluginMetadata(params = {}) {
     if (!dirent.isDirectory()) {
       continue;
     }
-    sourcePluginDirs.add(dirent.name);
 
     const pluginDir = path.join(extensionsRoot, dirent.name);
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     const distPluginDir = path.join(distExtensionsRoot, dirent.name);
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const packageJson = fs.existsSync(packageJsonPath)
+      ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
+      : undefined;
+    if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
+      removePathIfExists(distPluginDir);
+      continue;
+    }
+
+    sourcePluginDirs.add(dirent.name);
+
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
     if (!fs.existsSync(manifestPath)) {
@@ -220,13 +239,10 @@ export function copyBundledPluginMetadata(params = {}) {
     }
 
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    const packageJson = fs.existsSync(packageJsonPath)
-      ? JSON.parse(fs.readFileSync(packageJsonPath, "utf8"))
-      : null;
-    const missingRuntimeEntries = packageJson
-      ? listMissingBundledRuntimeEntries(distPluginDir, packageJson)
-      : [];
+    const missingRuntimeEntries =
+      packageJson && fs.existsSync(distPluginDir)
+        ? listMissingBundledRuntimeEntries(distPluginDir, packageJson)
+        : [];
     if (missingRuntimeEntries.length > 0) {
       removePathIfExists(distPluginDir);
       continue;
@@ -246,11 +262,10 @@ export function copyBundledPluginMetadata(params = {}) {
       : manifest;
     writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
 
-    if (!fs.existsSync(packageJsonPath)) {
+    if (!packageJson) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-
     if (packageJson.openclaw && "extensions" in packageJson.openclaw) {
       packageJson.openclaw = {
         ...packageJson.openclaw,
