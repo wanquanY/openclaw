@@ -214,6 +214,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exit(3);
   }
 
-  process.stdout.write(JSON.stringify(resolved));
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(JSON.stringify(resolved), (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
   process.exit(0);
 }

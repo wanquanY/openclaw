@@ -1,5 +1,5 @@
 import { listBundledWebSearchProviderEntries } from "../bundled-web-search.entries.js";
-import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-capability-metadata.js";
+import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
 import { resolveBundledWebSearchPluginId as resolveBundledWebSearchPluginIdFromMap } from "./bundled-web-search-provider-ids.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
@@ -21,17 +21,23 @@ export function resolveBundledWebSearchPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  const bundledWebSearchPluginIdSet = new Set<string>(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
-  return loadPluginManifestRegistry({
+  const bundledWebSearchPluginIds = new Set<string>(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
+  const manifestPluginIds = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })
     .plugins.filter(
-      (plugin) => plugin.origin === "bundled" && bundledWebSearchPluginIdSet.has(plugin.id),
+      (plugin) => plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
+  for (const provider of loadBundledWebSearchProviders()) {
+    bundledWebSearchPluginIds.add(provider.pluginId);
+  }
+  return [...new Set([...manifestPluginIds, ...bundledWebSearchPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }
 
 export function listBundledWebSearchPluginIds(): string[] {

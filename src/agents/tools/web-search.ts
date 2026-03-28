@@ -22,7 +22,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -1840,23 +1839,30 @@ async function runWebSearch(params: {
       body.tbs = tbs;
     }
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": params.apiKey,
+    const data = await withTrustedWebToolsEndpoint(
+      {
+        url: endpoint,
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-KEY": params.apiKey,
+          },
+          body: JSON.stringify(body),
+        },
       },
-      body: JSON.stringify(body),
-      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-    });
-
-    if (!res.ok) {
-      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-      const detail = detailResult.text;
-      throw new Error(`Serper API error (${res.status}): ${detail || res.statusText}`);
-    }
-
-    const data = (await res.json()) as SerperSearchResponse;
+      async ({ response }) => {
+        if (!response.ok) {
+          const detailResult = await readResponseText(response, { maxBytes: 64_000 });
+          const detail = detailResult.text;
+          throw new Error(
+            `Serper API error (${response.status}): ${detail || response.statusText}`,
+          );
+        }
+        return (await response.json()) as SerperSearchResponse;
+      },
+    );
     const results = Array.isArray(data.organic) ? data.organic : [];
     const mapped = results.map((entry) => {
       const description = entry.snippet ?? "";

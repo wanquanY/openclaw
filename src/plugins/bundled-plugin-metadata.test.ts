@@ -183,4 +183,61 @@ describe("bundled plugin metadata", () => {
       },
     });
   });
+
+  it("loads large generated channel schema surfaces without truncating child stdout", async () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-large-channel-config-");
+    const largeHelp = "x".repeat(12_000);
+
+    writeJson(path.join(tempRoot, "extensions", "alpha", "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+        channel: {
+          id: "alpha",
+          label: "Alpha",
+        },
+      },
+    });
+    writeJson(path.join(tempRoot, "extensions", "alpha", "openclaw.plugin.json"), {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(
+      path.join(tempRoot, "extensions", "alpha", "index.ts"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(tempRoot, "extensions", "alpha", "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempRoot, "extensions", "alpha", "src", "config-schema.js"),
+      [
+        "const largeHelp = 'x'.repeat(12000);",
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: {",
+        "    type: 'object',",
+        "    properties: {",
+        "      generated: {",
+        "        type: 'string',",
+        "        description: largeHelp,",
+        "      },",
+        "    },",
+        "  },",
+        "  uiHints: {",
+        "    'channels.alpha.generated': { help: largeHelp },",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const entries = await collectBundledPluginMetadata({ repoRoot: tempRoot });
+    const channelConfigs = entries[0]?.manifest.channelConfigs as
+      | Record<string, { schema?: { properties?: Record<string, { description?: string }> } }>
+      | undefined;
+
+    expect(channelConfigs?.alpha?.schema?.properties?.generated?.description).toBe(largeHelp);
+  });
 });

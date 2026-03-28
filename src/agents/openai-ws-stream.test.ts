@@ -1281,6 +1281,71 @@ describe("createOpenAIWebSocketStreamFn", () => {
     }
   });
 
+  it("uses the provided fallback streamFn when WebSocket falls back to HTTP", async () => {
+    MockManager.globalConnectShouldFail = true;
+    streamSimpleCalls.length = 0;
+    const fallbackStreamFn = vi.fn((model, _context, _options) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            ...assistantMsg(["fallback-ok"]),
+            api: (model as { api?: string }).api ?? "openai-responses",
+            provider: (model as { provider?: string }).provider ?? "openai",
+            model: (model as { id?: string }).id ?? "gpt-5.2",
+          },
+        });
+        stream.end();
+      });
+      return stream;
+    });
+
+    try {
+      const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-fallback-custom", {
+        fallbackStreamFn,
+      });
+      const stream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-from-options",
+          headers: { "x-test": "1" },
+        } as Parameters<typeof streamFn>[2],
+      );
+
+      const events: unknown[] = [];
+      for await (const ev of await resolveStream(stream)) {
+        events.push(ev);
+      }
+
+      expect(fallbackStreamFn).toHaveBeenCalledTimes(1);
+      expect(fallbackStreamFn).toHaveBeenCalledWith(
+        modelStub,
+        contextStub,
+        expect.objectContaining({
+          apiKey: "sk-from-options",
+          headers: { "x-test": "1" },
+        }),
+      );
+      expect(streamSimpleCalls.length).toBe(0);
+      expect(
+        events.some(
+          (event) =>
+            (event as { type?: string }).type === "done" &&
+            (
+              (event as { message?: { content?: unknown[] } }).message?.content?.[0] as {
+                text?: string;
+              }
+            )?.text === "fallback-ok",
+        ),
+      ).toBe(true);
+    } finally {
+      MockManager.globalConnectShouldFail = false;
+    }
+  });
+
   it("tracks previous_response_id across turns (incremental send)", async () => {
     const sessionId = "sess-incremental";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);

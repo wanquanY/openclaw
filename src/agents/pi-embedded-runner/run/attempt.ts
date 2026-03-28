@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { streamSimple, type ImageContent } from "@mariozechner/pi-ai";
+import { type ImageContent } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -35,7 +35,6 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createAnthropicVertexStreamFnForModel } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -58,7 +57,7 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveToolCallArgumentsEncoding } from "../../model-compat.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
+import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../../pi-bundle-mcp-tools.js";
@@ -76,7 +75,6 @@ import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settin
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
-import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -156,7 +154,6 @@ import {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
-  shouldUseOpenAIWebSocketTransport,
 } from "./attempt.thread-helpers.js";
 import {
   shouldRepairMalformedAnthropicToolCallArguments,
@@ -176,6 +173,7 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import { resolveEmbeddedRunStreamFn } from "./stream-selection.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -951,37 +949,18 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
-      const providerStreamFn = registerProviderStreamForModel({
+      activeSession.agent.streamFn = await resolveEmbeddedRunStreamFn({
+        currentStreamFn: activeSession.agent.streamFn,
         model: params.model,
-        cfg: params.config,
+        provider: params.provider,
+        config: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
+        sessionId: params.sessionId,
+        authStorage: params.authStorage,
+        abortSignal: runAbortController.signal,
+        log,
       });
-      if (providerStreamFn) {
-        activeSession.agent.streamFn = providerStreamFn;
-      } else if (
-        shouldUseOpenAIWebSocketTransport({
-          provider: params.provider,
-          modelApi: params.model.api,
-        })
-      ) {
-        const wsApiKey = await params.authStorage.getApiKey(params.provider);
-        if (wsApiKey) {
-          activeSession.agent.streamFn = createOpenAIWebSocketStreamFn(wsApiKey, params.sessionId, {
-            signal: runAbortController.signal,
-          });
-        } else {
-          log.warn(`[ws-stream] no API key for provider=${params.provider}; using HTTP transport`);
-          activeSession.agent.streamFn = streamSimple;
-        }
-      } else if (params.model.provider === "anthropic-vertex") {
-        // Anthropic Vertex AI: inject AnthropicVertex client into pi-ai's
-        // streamAnthropic for GCP IAM auth instead of Anthropic API keys.
-        activeSession.agent.streamFn = createAnthropicVertexStreamFnForModel(params.model);
-      } else {
-        // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
-      }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
         activeSession.agent,

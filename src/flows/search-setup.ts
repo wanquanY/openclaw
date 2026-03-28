@@ -54,6 +54,7 @@ const DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS = new Set<SearchProvider>([
   "grok",
   "kimi",
   "perplexity",
+  "serper",
   "tavily",
 ]);
 

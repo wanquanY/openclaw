@@ -233,6 +233,7 @@ async function collectBundledChannelConfigsForSource({ source, manifest }) {
       // even when inspecting a temporary or alternate repo root.
       cwd: FORMATTER_CWD,
       encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
     },
   );
   const surface = JSON.parse(surfaceJson);

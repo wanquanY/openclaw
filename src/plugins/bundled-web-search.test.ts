@@ -77,6 +77,7 @@ describe("bundled web search metadata", () => {
       "google",
       "moonshot",
       "perplexity",
+      "serper",
       "tavily",
       "xai",
     ]);
@@ -99,6 +100,7 @@ describe("bundled web search metadata", () => {
     expect(resolveBundledWebSearchPluginId("gemini")).toBe("google");
     expect(resolveBundledWebSearchPluginId("kimi")).toBe("moonshot");
     expect(resolveBundledWebSearchPluginId("perplexity")).toBe("perplexity");
+    expect(resolveBundledWebSearchPluginId("serper")).toBe("serper");
     expect(resolveBundledWebSearchPluginId("tavily")).toBe("tavily");
     expect(resolveBundledWebSearchPluginId("grok")).toBe("xai");
   });

@@ -21,6 +21,7 @@ const SEARCH_PROVIDER_ENV_VARS = [
   "MOONSHOT_API_KEY",
   "OPENROUTER_API_KEY",
   "PERPLEXITY_API_KEY",
+  "SERPER_API_KEY",
   "TAVILY_API_KEY",
   "XAI_API_KEY",
 ] as const;
@@ -258,6 +259,19 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "moonshot")).toBe("sk-moonshot");
     expect(result.plugins?.entries?.moonshot?.enabled).toBe(true);
+  });
+
+  it("sets provider and key for serper without creating plugin config", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "serper",
+      textValue: "serper-test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("serper");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.tools?.web?.search?.serper?.apiKey).toBe("serper-test-key");
+    expect(result.plugins?.entries?.serper).toBeUndefined();
   });
 
   it("sets provider and key for tavily and enables the plugin", async () => {
@@ -591,9 +605,9 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in alphabetical order", () => {
+  it("exports all 8 providers in alphabetical order", () => {
     const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
-    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
+    expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(8);
     expect(values).toEqual([
       "brave",
       "firecrawl",
@@ -601,6 +615,7 @@ describe("setupSearch", () => {
       "grok",
       "kimi",
       "perplexity",
+      "serper",
       "tavily",
     ]);
   });

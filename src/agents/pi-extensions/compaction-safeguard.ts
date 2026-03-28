@@ -614,12 +614,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const modelHeaders =
-      model.headers && typeof model.headers === "object" && !Array.isArray(model.headers)
-        ? model.headers
-        : undefined;
-    const headers = modelHeaders && Object.keys(modelHeaders).length > 0 ? modelHeaders : undefined;
-    const apiKey = (await ctx.modelRegistry.getApiKey(model)) ?? "";
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      log.warn(
+        `Compaction safeguard: auth resolution failed for ${model.provider}/${model.id}: ${auth.error}`,
+      );
+      setCompactionSafeguardCancelReason(
+        ctx.sessionManager,
+        `Compaction safeguard could not resolve request auth for ${model.provider}/${model.id}: ${auth.error}`,
+      );
+      return { cancel: true };
+    }
+    const headers = auth.headers;
+    const apiKey = auth.apiKey ?? "";
     if (!apiKey && !headers) {
       log.warn(
         "Compaction safeguard: no request auth available; cancelling compaction to preserve history.",

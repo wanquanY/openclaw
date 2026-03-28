@@ -4939,20 +4939,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   provider: {
                     type: "string",
                   },
-                  maxResults: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                  timeoutSeconds: {
-                    type: "integer",
-                    exclusiveMinimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                  cacheTtlMinutes: {
-                    type: "number",
-                    minimum: 0,
-                  },
                   apiKey: {
                     anyOf: [
                       {
@@ -5018,6 +5004,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         ],
                       },
                     ],
+                  },
+                  maxResults: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  cacheTtlMinutes: {
+                    type: "number",
+                    minimum: 0,
                   },
                   brave: {
                     type: "object",
@@ -5488,6 +5488,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "string",
                       },
                       model: {
+                        type: "string",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  serper: {
+                    type: "object",
+                    properties: {
+                      apiKey: {
+                        type: "string",
+                      },
+                      baseUrl: {
                         type: "string",
                       },
                     },
@@ -12627,7 +12639,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.web.search.provider": {
       label: "Web Search Provider",
-      help: "Search provider id. Auto-detected from available API keys if omitted.",
+      help: 'Search provider id (for example "brave", "serper", "perplexity", "grok", "gemini", or "kimi"). Auto-detected from available API keys if omitted.',
       tags: ["tools"],
     },
     "tools.web.search.maxResults": {
@@ -15191,6 +15203,68 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Plugin entry name inside the source marketplace, used for later updates.",
       tags: ["advanced"],
     },
+    "tools.web.search.apiKey": {
+      help: "Brave Search API key (fallback: BRAVE_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.brave.mode": {
+      help: 'Brave Search mode: "web" (URL results) or "llm-context" (pre-extracted page content for LLM grounding).',
+      tags: ["tools"],
+    },
+    "tools.web.search.gemini.apiKey": {
+      help: "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.gemini.model": {
+      help: 'Gemini model override (default: "gemini-2.5-flash").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.grok.apiKey": {
+      help: "Grok (xAI) API key (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.grok.model": {
+      help: 'Grok model override (default: "grok-4-1-fast").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.kimi.apiKey": {
+      help: "Moonshot/Kimi API key (fallback: KIMI_API_KEY or MOONSHOT_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.kimi.baseUrl": {
+      help: 'Kimi base URL override (default: "https://api.moonshot.ai/v1").',
+      tags: ["tools"],
+    },
+    "tools.web.search.kimi.model": {
+      help: 'Kimi model override (default: "moonshot-v1-128k").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.perplexity.apiKey": {
+      help: "Perplexity or OpenRouter API key (fallback: PERPLEXITY_API_KEY or OPENROUTER_API_KEY env var). Direct Perplexity keys default to the Search API; OpenRouter keys use Sonar chat completions.",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      help: "Optional Perplexity/OpenRouter chat-completions base URL override. Setting this opts Perplexity into the legacy Sonar/OpenRouter compatibility path.",
+      tags: ["tools"],
+    },
+    "tools.web.search.perplexity.model": {
+      help: 'Optional Sonar/OpenRouter model override (default: "perplexity/sonar-pro"). Setting this opts Perplexity into the legacy chat-completions compatibility path.',
+      tags: ["models", "tools"],
+    },
+    "tools.web.search.serper.apiKey": {
+      help: "Serper API key (fallback: SERPER_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.search.serper.baseUrl": {
+      help: "Serper base URL override (default: https://google.serper.dev).",
+      tags: ["tools"],
+    },
     "models.providers.*.headers.*": {
       sensitive: true,
       tags: ["security", "models"],
@@ -15223,31 +15297,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "storage"],
     },
-    "tools.web.search.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
     "tools.web.search.brave.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
     "tools.web.search.firecrawl.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.gemini.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.grok.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.kimi.apiKey": {
-      sensitive: true,
-      tags: ["security", "auth", "tools"],
-    },
-    "tools.web.search.perplexity.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },

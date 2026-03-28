@@ -7,6 +7,7 @@ import { createKimiWebSearchProvider } from "../extensions/moonshot/web-search-p
 import { createPerplexityWebSearchProvider } from "../extensions/perplexity/web-search-provider.js";
 import { createTavilyWebSearchProvider } from "../extensions/tavily/web-search-provider.js";
 import { createXaiWebSearchProvider } from "../extensions/xai/web-search.js";
+import { createLegacySerperWebSearchProviderEntry } from "./legacy-serper-web-search-provider.js";
 import type { PluginWebSearchProviderEntry } from "./plugins/types.js";
 
 export function listBundledWebSearchProviderEntries(): PluginWebSearchProviderEntry[] {
@@ -18,6 +19,7 @@ export function listBundledWebSearchProviderEntries(): PluginWebSearchProviderEn
     { pluginId: "google", ...createGeminiWebSearchProvider() },
     { pluginId: "moonshot", ...createKimiWebSearchProvider() },
     { pluginId: "perplexity", ...createPerplexityWebSearchProvider() },
+    createLegacySerperWebSearchProviderEntry(),
     { pluginId: "tavily", ...createTavilyWebSearchProvider() },
     { pluginId: "xai", ...createXaiWebSearchProvider() },
   ];

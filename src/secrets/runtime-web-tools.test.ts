@@ -2,7 +2,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 
-type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
+type ProviderUnderTest =
+  | "brave"
+  | "serper"
+  | "gemini"
+  | "grok"
+  | "kimi"
+  | "perplexity"
+  | "duckduckgo";
 
 const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
@@ -83,7 +90,10 @@ function createTestProvider(params: {
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
+  const credentialPath =
+    params.provider === "serper"
+      ? "tools.web.search.serper.apiKey"
+      : `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
   return {
     pluginId: params.pluginId,
     id: params.provider,
@@ -96,18 +106,44 @@ function createTestProvider(params: {
     autoDetectOrder: params.order,
     credentialPath: params.provider === "duckduckgo" ? "" : credentialPath,
     inactiveSecretPaths: params.provider === "duckduckgo" ? [] : [credentialPath],
-    getCredentialValue: (searchConfig) =>
-      params.provider === "duckduckgo" ? "duckduckgo-no-key-needed" : searchConfig?.apiKey,
+    getCredentialValue: (searchConfig) => {
+      if (params.provider === "duckduckgo") {
+        return "duckduckgo-no-key-needed";
+      }
+      if (params.provider === "serper") {
+        const serper = searchConfig?.serper;
+        return serper && typeof serper === "object"
+          ? (serper as { apiKey?: unknown }).apiKey
+          : undefined;
+      }
+      return searchConfig?.apiKey;
+    },
     setCredentialValue: (searchConfigTarget, value) => {
+      if (params.provider === "serper") {
+        const serper = (searchConfigTarget.serper ??= {}) as { apiKey?: unknown };
+        serper.apiKey = value;
+        return;
+      }
       searchConfigTarget.apiKey = value;
     },
     getConfiguredCredentialValue: (config) => {
+      if (params.provider === "serper") {
+        return config?.tools?.web?.search?.serper?.apiKey;
+      }
       const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
       return entryConfig && typeof entryConfig === "object"
         ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
         : undefined;
     },
     setConfiguredCredentialValue: (configTarget, value) => {
+      if (params.provider === "serper") {
+        const tools = ensureRecord(configTarget as Record<string, unknown>, "tools");
+        const web = ensureRecord(tools, "web");
+        const search = ensureRecord(web, "search");
+        const serper = ensureRecord(search, "serper");
+        serper.apiKey = value;
+        return;
+      }
       setConfiguredProviderKey(configTarget, params.pluginId, value);
     },
     resolveRuntimeMetadata:
@@ -123,6 +159,7 @@ function createTestProvider(params: {
 function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return [
     createTestProvider({ provider: "brave", pluginId: "brave", order: 10 }),
+    createTestProvider({ provider: "serper", pluginId: "serper", order: 15 }),
     createTestProvider({ provider: "gemini", pluginId: "google", order: 20 }),
     createTestProvider({ provider: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ provider: "kimi", pluginId: "moonshot", order: 40 }),
@@ -175,6 +212,9 @@ function createProviderSecretRefConfig(
 }
 
 function readProviderKey(config: OpenClawConfig, provider: ProviderUnderTest): unknown {
+  if (provider === "serper") {
+    return config.tools?.web?.search?.serper?.apiKey;
+  }
   const pluginConfig = config.plugins?.entries?.[providerPluginId(provider)]?.config as
     | { webSearch?: { apiKey?: unknown } }
     | undefined;
@@ -643,6 +683,44 @@ describe("runtime web tools resolution", () => {
       }),
     );
     expect(genericSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts configured legacy serper provider without invalid-autodetect warning", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "serper",
+              serper: {
+                apiKey: "serper-runtime-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.providerConfigured).toBe("serper");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(metadata.search.selectedProvider).toBe("serper");
+    expect(metadata.search.selectedProviderKeySource).toBe("config");
+    expect(readProviderKey(resolvedConfig, "serper")).toBe("serper-runtime-key");
+    expect(metadata.search.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+        }),
+      ]),
+    );
+    expect(context.warnings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT",
+        }),
+      ]),
+    );
   });
 
   it("does not resolve Firecrawl SecretRef when Firecrawl is inactive", async () => {
