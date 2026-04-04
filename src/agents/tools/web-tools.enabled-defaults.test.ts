@@ -291,6 +291,77 @@ describe("web tools defaults", () => {
 
     expect(tool?.description).toBe("custom runtime tool");
   });
+
+  it("annotates built-in web_search provider errors with the provider id", async () => {
+    const fetchFailed = new TypeError("fetch failed");
+    const mockFetch = vi.fn(async () => {
+      throw fetchFailed;
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createSerperSearchTool({
+      apiKey: "serper-config-test", // pragma: allowlist secret
+    });
+
+    await expect(tool?.execute?.("call-serper-error", { query: "test" })).rejects.toThrow(
+      "web_search (serper) failed: fetch failed",
+    );
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it("annotates runtime web_search provider errors with the provider id", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({
+      pluginId: "duckduckgo",
+      pluginName: "DuckDuckGo Search",
+      source: "test",
+      provider: {
+        id: "duckduckgo",
+        label: "DuckDuckGo Search (experimental)",
+        hint: "Keyless fallback",
+        requiresCredential: false,
+        envVars: [],
+        placeholder: "(no key needed)",
+        signupUrl: "https://duckduckgo.com/",
+        autoDetectOrder: 100,
+        credentialPath: "",
+        getCredentialValue: () => "duckduckgo-no-key-needed",
+        setCredentialValue: () => {},
+        createTool: () => ({
+          description: "duckduckgo runtime tool",
+          parameters: {},
+          execute: async () => {
+            throw new TypeError("fetch failed");
+          },
+        }),
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "duckduckgo",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "duckduckgo",
+        providerSource: "configured",
+        selectedProvider: "duckduckgo",
+        selectedProviderKeySource: "missing",
+        diagnostics: [],
+      },
+    });
+
+    await expect(tool?.execute?.("call-duckduckgo-error", { query: "test" })).rejects.toThrow(
+      "web_search (duckduckgo) failed: fetch failed",
+    );
+  });
 });
 
 describe("web_search country and language parameters", () => {

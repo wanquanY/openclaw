@@ -669,6 +669,16 @@ function missingSearchKeyPayload(provider: SearchProvider) {
   };
 }
 
+function wrapWebSearchExecutionError(provider: string, error: unknown): Error {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const normalizedProvider = provider.trim().toLowerCase();
+  if (message.trim().toLowerCase().startsWith(`web_search (${normalizedProvider}) failed:`)) {
+    return error instanceof Error ? error : new Error(message);
+  }
+  return new Error(`web_search (${provider}) failed: ${message}`, { cause: error });
+}
+
 function resolveSearchProvider(search?: WebSearchConfig): SearchProvider {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
@@ -2104,7 +2114,13 @@ export function createWebSearchTool(options?: {
       name: "web_search",
       description: resolved.definition.description,
       parameters: resolved.definition.parameters,
-      execute: async (_toolCallId, args) => jsonResult(await resolved.definition.execute(args)),
+      execute: async (_toolCallId, args) => {
+        try {
+          return jsonResult(await resolved.definition.execute(args));
+        } catch (error) {
+          throw wrapWebSearchExecutionError(resolved.provider.id, error);
+        }
+      },
     };
   }
 
@@ -2400,35 +2416,39 @@ export function createWebSearchTool(options?: {
         });
       }
 
-      const result = await runWebSearch({
-        query,
-        count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
-        timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-        provider,
-        country,
-        language,
-        search_lang: resolvedSearchLang,
-        ui_lang: resolvedUiLang,
-        freshness,
-        dateAfter,
-        dateBefore,
-        searchDomainFilter: domainFilter,
-        maxTokens: maxTokens ?? undefined,
-        maxTokensPerPage: maxTokensPerPage ?? undefined,
-        perplexityBaseUrl: perplexityRuntime?.baseUrl,
-        perplexityModel: perplexityRuntime?.model,
-        perplexityTransport: perplexityRuntime?.transport,
-        grokModel: resolveGrokModel(grokConfig),
-        grokInlineCitations: resolveGrokInlineCitations(grokConfig),
-        geminiModel: resolveGeminiModel(geminiConfig),
-        kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
-        kimiModel: resolveKimiModel(kimiConfig),
-        serperBaseUrl: resolveSerperBaseUrl(serperConfig),
-        braveMode,
-      });
-      return jsonResult(result);
+      try {
+        const result = await runWebSearch({
+          query,
+          count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          apiKey,
+          timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+          cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+          provider,
+          country,
+          language,
+          search_lang: resolvedSearchLang,
+          ui_lang: resolvedUiLang,
+          freshness,
+          dateAfter,
+          dateBefore,
+          searchDomainFilter: domainFilter,
+          maxTokens: maxTokens ?? undefined,
+          maxTokensPerPage: maxTokensPerPage ?? undefined,
+          perplexityBaseUrl: perplexityRuntime?.baseUrl,
+          perplexityModel: perplexityRuntime?.model,
+          perplexityTransport: perplexityRuntime?.transport,
+          grokModel: resolveGrokModel(grokConfig),
+          grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+          geminiModel: resolveGeminiModel(geminiConfig),
+          kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
+          kimiModel: resolveKimiModel(kimiConfig),
+          serperBaseUrl: resolveSerperBaseUrl(serperConfig),
+          braveMode,
+        });
+        return jsonResult(result);
+      } catch (error) {
+        throw wrapWebSearchExecutionError(provider, error);
+      }
     },
   };
 }
