@@ -8,7 +8,7 @@ import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.t
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveWebSearchDefinition } from "../../web-search/runtime.js";
-import { normalizeXaiModelId } from "../model-id-normalization.js";
+import { normalizeXaiModelId } from "../../plugin-sdk/xai-model-id.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";

@@ -6,6 +6,8 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
+import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
@@ -21,6 +23,7 @@ export type ToolErrorSummary = {
   toolName: string;
   meta?: string;
   error?: string;
+  timedOut?: boolean;
   mutatingAction?: boolean;
   actionFingerprint?: string;
 };
@@ -36,6 +39,9 @@ export type EmbeddedPiSubscribeState = {
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
+  itemActiveIds: Set<string>;
+  itemStartedCount: number;
+  itemCompletedCount: number;
   lastToolError?: ToolErrorSummary;
 
   blockReplyBreak: "text_end" | "message_end";
@@ -68,6 +74,9 @@ export type EmbeddedPiSubscribeState = {
   compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
   unsubscribed: boolean;
+  replayState: EmbeddedRunReplayState;
+  livenessState: EmbeddedRunLivenessState;
+  hadDeterministicSideEffect: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
@@ -79,6 +88,7 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
+  deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
 };
@@ -101,7 +111,7 @@ export type EmbeddedPiSubscribeContext = {
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ) => string;
   emitBlockChunk: (text: string) => void;
-  flushBlockReplyBuffer: () => void;
+  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,
@@ -137,7 +147,14 @@ export type EmbeddedPiSubscribeContext = {
  */
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
-  "runId" | "agentId" | "sessionKey" | "onBlockReplyFlush" | "onAgentEvent" | "onToolResult"
+  | "runId"
+  | "agentId"
+  | "sessionKey"
+  | "onBlockReplyFlush"
+  | "onAgentEvent"
+  | "onToolResult"
+  | "silentExpected"
+  | "toolResultFormat"
 >;
 
 export type ToolHandlerState = Pick<
@@ -145,17 +162,22 @@ export type ToolHandlerState = Pick<
   | "toolMetaById"
   | "toolMetas"
   | "toolSummaryById"
+  | "itemActiveIds"
+  | "itemStartedCount"
+  | "itemCompletedCount"
   | "lastToolError"
   | "pendingMessagingTargets"
   | "pendingMessagingTexts"
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
   | "pendingToolAudioAsVoice"
+  | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
   | "successfulCronAdds"
+  | "deterministicApprovalPromptPending"
   | "deterministicApprovalPromptSent"
 >;
 
@@ -164,7 +186,7 @@ export type ToolHandlerContext = {
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
-  flushBlockReplyBuffer: () => void;
+  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;

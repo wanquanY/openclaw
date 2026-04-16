@@ -1,5 +1,8 @@
-import { BUNDLED_WEB_SEARCH_PLUGIN_IDS as BUNDLED_WEB_SEARCH_PLUGIN_IDS_FROM_METADATA } from "./bundled-capability-metadata.js";
+import { listBundledWebSearchProviderEntries } from "../bundled-web-search.entries.js";
 import { listLegacyBundledWebSearchPluginIds } from "./legacy-bundled-web-search.js";
+
+const BUNDLED_WEB_SEARCH_PLUGIN_IDS_FROM_METADATA =
+  listBundledWebSearchProviderEntries().map(({ pluginId }) => pluginId);
 
 export const BUNDLED_WEB_SEARCH_PLUGIN_IDS = [
   ...new Set([

@@ -22,6 +22,7 @@ import {
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   appendSessionPreviousSession,
@@ -31,14 +32,17 @@ import {
 } from "../../config/sessions/types.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -54,10 +58,40 @@ const log = createSubsystemLogger("session-init");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
+let sessionMcpToolsRuntimePromise: Promise<
+  typeof import("../../agents/pi-bundle-mcp-tools.js")
+> | null = null;
+
+const SYSTEM_EVENT_PROVIDERS = new Set(["heartbeat", "cron-event", "exec-event"]);
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
+}
+
+function loadSessionMcpToolsRuntime() {
+  sessionMcpToolsRuntimePromise ??= import("../../agents/pi-bundle-mcp-tools.js");
+  return sessionMcpToolsRuntimePromise;
+}
+
+function isSystemEventProvider(provider?: string | null): boolean {
+  const normalized = normalizeMessageChannel(provider);
+  return Boolean(normalized && SYSTEM_EVENT_PROVIDERS.has(normalized));
+}
+
+function resolveConfiguredDefaultAccountId(
+  cfg: OpenClawConfig,
+  channel?: string | null,
+): string | undefined {
+  const normalizedChannel = normalizeMessageChannel(channel);
+  if (!normalizedChannel) {
+    return undefined;
+  }
+  const channels = cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const configured = channels?.[normalizedChannel]?.defaultAccount;
+  return typeof configured === "string" && configured.trim() ? configured.trim() : undefined;
 }
 
 export type SessionInitResult = {
@@ -180,13 +214,28 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const currentConversationBinding =
+    ctx.CommandSource === "native"
+      ? null
+      : resolveConversationBindingContextFromMessage({
+          cfg,
+          ctx,
+        });
+  const currentConversationSessionBinding = currentConversationBinding
+    ? getSessionBindingService().resolveByConversation(currentConversationBinding)
+    : null;
+  const boundConversationSessionKey =
+    currentConversationSessionBinding?.targetKind === "session"
+      ? currentConversationSessionBinding.targetSessionKey.trim() || undefined
+      : undefined;
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const effectiveSessionKeyOverride = targetSessionKey || boundConversationSessionKey;
   const sessionCtxForState =
-    targetSessionKey && targetSessionKey !== ctx.SessionKey
-      ? { ...ctx, SessionKey: targetSessionKey }
+    effectiveSessionKeyOverride && effectiveSessionKeyOverride !== ctx.SessionKey
+      ? { ...ctx, SessionKey: effectiveSessionKeyOverride }
       : ctx;
   const sessionCfg = cfg.session;
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -237,6 +286,7 @@ export async function initSessionState(params: {
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
   let persistedLabel: string | undefined;
+  let preservedEntryFields: Partial<SessionEntry> | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -252,22 +302,31 @@ export async function initSessionState(params: {
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
   const rawBody = commandSource;
   const trimmedBody = rawBody.trim();
-  const resetAuthorized = resolveCommandAuthorization({
+  const commandAuthorization = resolveCommandAuthorization({
     ctx,
     cfg,
     commandAuthorized,
-  }).isAuthorizedSender;
+  });
+  const resetAuthorized =
+    commandAuthorization.isAuthorizedSender &&
+    (!isInternalMessageChannel(ctx.Provider) ||
+      (Array.isArray(ctx.GatewayClientScopes) &&
+        ctx.GatewayClientScopes.includes("operator.admin")));
   // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
   // web inbox before we get here. They prevented reset triggers like "/new"
   // from matching, so strip structural wrappers when checking for resets.
   const strippedForReset = isGroup
     ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
+  const boundAcpResetSessionKey = resolveBoundAcpSessionForReset({
+    cfg,
+    ctx: sessionCtxForState,
+  });
   const shouldUseAcpInPlaceReset = Boolean(
-    resolveBoundAcpSessionForReset({
-      cfg,
-      ctx: sessionCtxForState,
-    }),
+    !targetSessionKey &&
+    !isAcpSessionKey(sessionCtxForState.SessionKey) &&
+    boundAcpResetSessionKey &&
+    boundAcpResetSessionKey !== sessionCtxForState.SessionKey?.trim(),
   );
   const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
     shouldUseAcpInPlaceReset &&
@@ -395,6 +454,16 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
       persistedLabel = entry.label;
+      preservedEntryFields = {
+        spawnedBy: entry.spawnedBy,
+        spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+        parentSessionKey: entry.parentSessionKey,
+        forkedFromParent: entry.forkedFromParent,
+        spawnDepth: entry.spawnDepth,
+        subagentRole: entry.subagentRole,
+        subagentControlScope: entry.subagentControlScope,
+        displayName: entry.displayName,
+      };
     }
   }
 
@@ -403,22 +472,37 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const isSystemEventTurn = isSystemEventProvider(ctx.Provider);
   // Track the originating channel/to for announce routing (subagent announce-back).
-  const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
-  const lastChannelRaw = resolveLastChannelRaw({
-    originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-  });
-  const lastToRaw = resolveLastToRaw({
-    originatingChannelRaw,
-    originatingToRaw: ctx.OriginatingTo,
-    toRaw: ctx.To,
-    persistedLastTo: baseEntry?.lastTo,
-    persistedLastChannel: baseEntry?.lastChannel,
-    sessionKey,
-  });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const originatingChannelRaw = isSystemEventTurn
+    ? undefined
+    : ((ctx.OriginatingChannel as string | undefined) ?? ctx.Provider);
+  const lastChannelRaw = isSystemEventTurn
+    ? baseEntry?.lastChannel
+    : resolveLastChannelRaw({
+        originatingChannelRaw,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+      });
+  const lastToRaw = isSystemEventTurn
+    ? baseEntry?.lastTo
+    : resolveLastToRaw({
+        originatingChannelRaw,
+        originatingToRaw: ctx.OriginatingTo,
+        toRaw: ctx.To,
+        persistedLastTo: baseEntry?.lastTo,
+        persistedLastChannel: baseEntry?.lastChannel,
+        sessionKey,
+      });
+  const lastAccountIdRaw = isSystemEventTurn
+    ? baseEntry?.lastAccountId
+    : ctx.AccountId ||
+      baseEntry?.lastAccountId ||
+      resolveConfiguredDefaultAccountId(
+        cfg,
+        currentConversationBinding?.channel ?? originatingChannelRaw ?? ctx.Surface ?? ctx.Provider,
+      ) ||
+      currentConversationBinding?.accountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
@@ -437,6 +521,7 @@ export async function initSessionState(params: {
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
   sessionEntry = {
     ...baseEntry,
+    ...preservedEntryFields,
     sessionId,
     updatedAt: Date.now(),
     systemSent,
@@ -460,7 +545,7 @@ export async function initSessionState(params: {
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
     queueDrop: baseEntry?.queueDrop,
-    displayName: baseEntry?.displayName,
+    displayName: preservedEntryFields?.displayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
     groupId: baseEntry?.groupId,
@@ -479,9 +564,15 @@ export async function initSessionState(params: {
     sessionKey,
     existing: sessionEntry,
     groupResolution,
+    skipSystemEventOrigin: isSystemEventTurn,
   });
   if (metaPatch) {
     sessionEntry = { ...sessionEntry, ...metaPatch };
+  }
+  if (isSystemEventTurn && !isThread && sessionEntry.origin?.threadId != null) {
+    const { threadId: _threadId, ...originWithoutThread } = sessionEntry.origin;
+    sessionEntry.origin =
+      Object.keys(originWithoutThread).length > 0 ? originWithoutThread : undefined;
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";
@@ -527,8 +618,10 @@ export async function initSessionState(params: {
       }
     }
   }
+  const inferredSessionThreadId =
+    ctx.MessageThreadId ?? parseSessionThreadInfoFast(sessionKey).threadId;
   const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
+    ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, inferredSessionThreadId)
     : undefined;
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,
@@ -572,12 +665,12 @@ export async function initSessionState(params: {
     }
   }
   // Preserve per-session overrides while resetting compaction state on /new.
-  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  sessionStore[sessionKey] = sessionEntry;
   await updateSessionStore(
     storePath,
     (store) => {
       // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
+      store[sessionKey] = sessionEntry;
       if (retiredLegacyMainDelivery) {
         store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
       }
@@ -596,6 +689,8 @@ export async function initSessionState(params: {
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   if (previousSessionEntry?.sessionId) {
+    const { disposeSessionMcpRuntime } = await loadSessionMcpToolsRuntime();
+    await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch(() => {});
     const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
     archiveSessionTranscripts({
       sessionId: previousSessionEntry.sessionId,
@@ -608,6 +703,7 @@ export async function initSessionState(params: {
 
   const sessionCtx: TemplateContext = {
     ...ctx,
+    SessionKey: sessionKey,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
     BodyStripped: normalizeInboundTextNewlines(

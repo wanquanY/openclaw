@@ -15,13 +15,13 @@ import {
   applyConfigOverrides,
   isNixMode,
   loadConfig,
-  migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -68,8 +68,8 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
-  resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runSetupWizard } from "../wizard/setup.js";
@@ -661,6 +661,7 @@ export async function startGatewayServer(
 
   const wizardRunner = opts.wizardRunner ?? runSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
+  const getResolvedAuth = () => resolvedAuth;
 
   const deps = createDefaultDeps();
   let canvasHostServer: CanvasHostServer | null = null;
@@ -686,6 +687,7 @@ export async function startGatewayServer(
     httpServers,
     httpBindHosts,
     wss,
+    preauthConnectionBudget,
     clients,
     broadcast,
     broadcastToConnIds,
@@ -713,6 +715,7 @@ export async function startGatewayServer(
     openResponsesConfig,
     strictTransportSecurityHeader,
     resolvedAuth,
+    getResolvedAuth,
     rateLimiter: authRateLimiter,
     gatewayTls,
     hooksConfig: () => hooksConfig,
@@ -1263,11 +1266,13 @@ export async function startGatewayServer(
     attachGatewayWsHandlers({
       wss,
       clients,
+      preauthConnectionBudget,
       port,
       gatewayHost: bindHost ?? undefined,
       canvasHostEnabled: Boolean(canvasHost),
       canvasHostServerPort,
       resolvedAuth,
+      getResolvedAuth,
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       gatewayMethods,
