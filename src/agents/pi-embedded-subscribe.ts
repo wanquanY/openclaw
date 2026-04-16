@@ -680,7 +680,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
-      state.hadDeterministicSideEffect === true ||
+      state.hadDeterministicSideEffect ||
       messagingToolSentTexts.length > 0 ||
       messagingToolSentMediaUrls.length > 0 ||
       state.successfulCronAdds > 0;

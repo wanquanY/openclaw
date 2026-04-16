@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   evaluateSessionFreshness,
   resolveChannelResetConfig,
@@ -23,6 +22,7 @@ import {
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   appendSessionPreviousSession,
@@ -58,8 +58,9 @@ const log = createSubsystemLogger("session-init");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
-let sessionMcpToolsRuntimePromise: Promise<typeof import("../../agents/pi-bundle-mcp-tools.js")> | null =
-  null;
+let sessionMcpToolsRuntimePromise: Promise<
+  typeof import("../../agents/pi-bundle-mcp-tools.js")
+> | null = null;
 
 const SYSTEM_EVENT_PROVIDERS = new Set(["heartbeat", "cron-event", "exec-event"]);
 
@@ -323,9 +324,9 @@ export async function initSessionState(params: {
   });
   const shouldUseAcpInPlaceReset = Boolean(
     !targetSessionKey &&
-      !isAcpSessionKey(sessionCtxForState.SessionKey) &&
-      boundAcpResetSessionKey &&
-      boundAcpResetSessionKey !== sessionCtxForState.SessionKey?.trim(),
+    !isAcpSessionKey(sessionCtxForState.SessionKey) &&
+    boundAcpResetSessionKey &&
+    boundAcpResetSessionKey !== sessionCtxForState.SessionKey?.trim(),
   );
   const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
     shouldUseAcpInPlaceReset &&
@@ -475,7 +476,7 @@ export async function initSessionState(params: {
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = isSystemEventTurn
     ? undefined
-    : ((ctx.OriginatingChannel as string | undefined) ?? (ctx.Provider as string | undefined));
+    : ((ctx.OriginatingChannel as string | undefined) ?? ctx.Provider);
   const lastChannelRaw = isSystemEventTurn
     ? baseEntry?.lastChannel
     : resolveLastChannelRaw({
@@ -570,7 +571,8 @@ export async function initSessionState(params: {
   }
   if (isSystemEventTurn && !isThread && sessionEntry.origin?.threadId != null) {
     const { threadId: _threadId, ...originWithoutThread } = sessionEntry.origin;
-    sessionEntry.origin = Object.keys(originWithoutThread).length > 0 ? originWithoutThread : undefined;
+    sessionEntry.origin =
+      Object.keys(originWithoutThread).length > 0 ? originWithoutThread : undefined;
   }
   if (!sessionEntry.chatType) {
     sessionEntry.chatType = "direct";

@@ -44,7 +44,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
   const hadDeterministicSideEffect =
-    ctx.state.hadDeterministicSideEffect === true ||
+    ctx.state.hadDeterministicSideEffect ||
     (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
     (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
     (ctx.state.successfulCronAdds ?? 0) > 0;

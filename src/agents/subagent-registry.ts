@@ -806,12 +806,7 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       }
 
       const waitStartedAt = Date.now();
-      const wait = await callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
+      const wait = await callGateway({
         method: "agent.wait",
         params: {
           runId,
