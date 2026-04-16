@@ -2,7 +2,7 @@ import type { Server as HttpServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import {
@@ -19,11 +19,8 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
-import {
-  createGatewayBroadcaster,
-  type GatewayBroadcastFn,
-  type GatewayBroadcastToConnIdsFn,
-} from "./server-broadcast.js";
+import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
   createChatRunState,
@@ -44,6 +41,10 @@ import {
   shouldEnforceGatewayAuthForPluginPath,
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
+import {
+  createPreauthConnectionBudget,
+  type PreauthConnectionBudget,
+} from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -61,6 +62,7 @@ export async function createGatewayRuntimeState(params: {
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   gatewayTls?: GatewayTlsRuntime;
@@ -84,6 +86,7 @@ export async function createGatewayRuntimeState(params: {
   httpServers: HttpServer[];
   httpBindHosts: string[];
   wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -185,6 +188,7 @@ export async function createGatewayRuntimeState(params: {
         handlePluginRequest,
         shouldEnforcePluginGatewayAuth,
         resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
@@ -215,13 +219,16 @@ export async function createGatewayRuntimeState(params: {
       noServer: true,
       maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
     });
+    const preauthConnectionBudget = createPreauthConnectionBudget();
     for (const server of httpServers) {
       attachGatewayUpgradeHandler({
         httpServer: server,
         wss,
         canvasHost,
         clients,
+        preauthConnectionBudget,
         resolvedAuth: params.resolvedAuth,
+        getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
       });
     }
@@ -254,6 +261,7 @@ export async function createGatewayRuntimeState(params: {
       httpServers,
       httpBindHosts,
       wss,
+      preauthConnectionBudget,
       clients,
       broadcast,
       broadcastToConnIds,

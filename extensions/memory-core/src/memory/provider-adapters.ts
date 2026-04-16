@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
@@ -9,23 +10,32 @@ import {
   OPENAI_BATCH_ENDPOINT,
   buildGeminiEmbeddingRequest,
   createGeminiEmbeddingProvider,
+  createLmstudioEmbeddingProvider,
   createLocalEmbeddingProvider,
   createMistralEmbeddingProvider,
   createOllamaEmbeddingProvider,
   createOpenAiEmbeddingProvider,
   createVoyageEmbeddingProvider,
   hasNonTextEmbeddingParts,
-  listMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviderAdapters,
   runGeminiEmbeddingBatches,
   runOpenAiEmbeddingBatches,
   runVoyageEmbeddingBatches,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { getProviderEnvVars } from "openclaw/plugin-sdk/provider-env-vars";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { formatErrorMessage } from "../dreaming-shared.js";
+import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-adapter-registration.js";
 
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
+  providerId: string;
+  authProviderId: string;
+  envVars: string[];
+  transport: "local" | "remote";
+  autoSelectPriority?: number;
+};
 
 function isMissingApiKeyError(err: unknown): boolean {
   return formatErrorMessage(err).includes("No API key found for provider");
@@ -35,9 +45,11 @@ function sanitizeHeaders(
   headers: Record<string, string>,
   excludedHeaderNames: string[],
 ): Array<[string, string]> {
-  const excluded = new Set(excludedHeaderNames.map((name) => name.toLowerCase()));
+  const excluded = new Set(
+    excludedHeaderNames.map((name) => normalizeLowercaseStringOrEmpty(name)),
+  );
   return Object.entries(headers)
-    .filter(([key]) => !excluded.has(key.toLowerCase()))
+    .filter(([key]) => !excluded.has(normalizeLowercaseStringOrEmpty(key)))
     .toSorted(([a], [b]) => a.localeCompare(b))
     .map(([key, value]) => [key, value]);
 }
@@ -105,6 +117,10 @@ function supportsGeminiMultimodalEmbeddings(model: string): boolean {
     .replace(/^models\//, "")
     .replace(/^(gemini|google)\//, "");
   return normalized === "gemini-embedding-2-preview";
+}
+
+function resolveMemoryEmbeddingAuthProviderId(providerId: string): string {
+  return providerId === "gemini" ? "google" : providerId;
 }
 
 const openAiAdapter: MemoryEmbeddingProviderAdapter = {
@@ -292,7 +308,34 @@ const ollamaAdapter: MemoryEmbeddingProviderAdapter = {
         id: "ollama",
         cacheKeyData: {
           provider: "ollama",
+          baseUrl: client.baseUrl,
           model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
+        },
+      },
+    };
+  },
+};
+
+const lmstudioAdapter: MemoryEmbeddingProviderAdapter = {
+  id: "lmstudio",
+  defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
+  transport: "remote",
+  create: async (options) => {
+    const { provider, client } = await createLmstudioEmbeddingProvider({
+      ...options,
+      provider: "lmstudio",
+      fallback: "none",
+    });
+    return {
+      provider,
+      runtime: {
+        id: "lmstudio",
+        cacheKeyData: {
+          provider: "lmstudio",
+          baseUrl: client.baseUrl,
+          model: client.model,
+          headers: sanitizeHeaders(client.headers, ["authorization"]),
         },
       },
     };
@@ -332,6 +375,7 @@ export const builtinMemoryEmbeddingProviderAdapters = [
   voyageAdapter,
   mistralAdapter,
   ollamaAdapter,
+  lmstudioAdapter,
 ] as const;
 
 const builtinMemoryEmbeddingProviderAdapterById = new Map(
@@ -347,17 +391,50 @@ export function getBuiltinMemoryEmbeddingProviderAdapter(
 export function registerBuiltInMemoryEmbeddingProviders(register: {
   registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
 }): void {
-  const existingIds = new Set(listMemoryEmbeddingProviders().map((adapter) => adapter.id));
-  for (const adapter of builtinMemoryEmbeddingProviderAdapters) {
-    if (existingIds.has(adapter.id)) {
-      continue;
-    }
+  // Only inspect providers already registered in the current load. Falling back
+  // to capability discovery here can recursively trigger plugin loading while
+  // memory-core itself is still registering.
+  for (const adapter of filterUnregisteredMemoryEmbeddingProviderAdapters({
+    builtinAdapters: builtinMemoryEmbeddingProviderAdapters,
+    registeredAdapters: listRegisteredMemoryEmbeddingProviderAdapters(),
+  })) {
     register.registerMemoryEmbeddingProvider(adapter);
   }
 }
 
+export function getBuiltinMemoryEmbeddingProviderDoctorMetadata(
+  providerId: string,
+): BuiltinMemoryEmbeddingProviderDoctorMetadata | null {
+  const adapter = getBuiltinMemoryEmbeddingProviderAdapter(providerId);
+  if (!adapter) {
+    return null;
+  }
+  const authProviderId = resolveMemoryEmbeddingAuthProviderId(adapter.id);
+  return {
+    providerId: adapter.id,
+    authProviderId,
+    envVars: getProviderEnvVars(authProviderId),
+    transport: adapter.transport === "local" ? "local" : "remote",
+    autoSelectPriority: adapter.autoSelectPriority,
+  };
+}
+
+export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Array<BuiltinMemoryEmbeddingProviderDoctorMetadata> {
+  return builtinMemoryEmbeddingProviderAdapters
+    .filter((adapter) => typeof adapter.autoSelectPriority === "number")
+    .toSorted((a, b) => (a.autoSelectPriority ?? 0) - (b.autoSelectPriority ?? 0))
+    .map((adapter) => ({
+      providerId: adapter.id,
+      authProviderId: resolveMemoryEmbeddingAuthProviderId(adapter.id),
+      envVars: getProviderEnvVars(resolveMemoryEmbeddingAuthProviderId(adapter.id)),
+      transport: adapter.transport === "local" ? "local" : "remote",
+      autoSelectPriority: adapter.autoSelectPriority,
+    }));
+}
+
 export {
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   DEFAULT_LOCAL_MODEL,
   DEFAULT_MISTRAL_EMBEDDING_MODEL,
   DEFAULT_OLLAMA_EMBEDDING_MODEL,

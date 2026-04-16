@@ -30,9 +30,9 @@ export { formatDocsLink } from "../terminal/links.js";
 export {
   looksLikeSignalTargetId,
   normalizeSignalMessagingTarget,
-} from "../channels/plugins/normalize/signal.js";
+} from "../../extensions/signal/api.js";
 export { detectBinary } from "../plugins/setup-binary.js";
-export { installSignalCli } from "../plugins/signal-cli-install.js";
+export { installSignalCli } from "../../extensions/signal/api.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

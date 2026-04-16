@@ -3,8 +3,10 @@ import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AgentInternalEvent } from "./internal-events.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 
 export type ToolResultFormat = "markdown" | "plain";
 
@@ -18,9 +20,12 @@ export type SubscribeEmbeddedPiSessionParams = {
    */
   sessionId?: string;
   hookRunner?: HookRunner;
+  internalEvents?: AgentInternalEvent[];
+  initialReplayState?: EmbeddedRunReplayState;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  silentExpected?: boolean;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
