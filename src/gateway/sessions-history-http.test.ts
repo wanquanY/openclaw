@@ -679,7 +679,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("rejects session history when operator.read is not requested", async () => {
+  test("treats shared-secret bearer auth as trusted operator access for session history HTTP", async () => {
     await seedSession({ text: "scope-guarded history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
@@ -707,13 +707,15 @@ describe("session history HTTP endpoints", () => {
           },
         },
       );
-      expect(httpHistory.status).toBe(403);
+      expect(httpHistory.status).toBe(200);
       await expect(httpHistory.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+        sessionKey: "agent:main:main",
+        hasMore: false,
+        messages: [
+          {
+            content: [{ text: "scope-guarded history" }],
+          },
+        ],
       });
 
       const httpHistoryWithoutScopes = await fetch(
@@ -722,13 +724,15 @@ describe("session history HTTP endpoints", () => {
           headers: AUTH_HEADER,
         },
       );
-      expect(httpHistoryWithoutScopes.status).toBe(403);
+      expect(httpHistoryWithoutScopes.status).toBe(200);
       await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+        sessionKey: "agent:main:main",
+        hasMore: false,
+        messages: [
+          {
+            content: [{ text: "scope-guarded history" }],
+          },
+        ],
       });
     } finally {
       ws.close();

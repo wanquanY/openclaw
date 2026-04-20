@@ -19,7 +19,7 @@ import {
 import {
   authorizeGatewayHttpRequestOrReply,
   getHeader,
-  resolveTrustedHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
@@ -123,7 +123,7 @@ export async function handleSessionHistoryHttpRequest(
 
   // HTTP callers must declare the same least-privilege operator scopes they
   // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

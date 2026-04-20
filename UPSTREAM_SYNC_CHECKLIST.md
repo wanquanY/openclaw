@@ -362,6 +362,35 @@ git merge upstream
 - 下游产品要求不是“每个 agent 一套独立广场”，而是“同一个广场里可以把 skill 安装到任意目标 agent”
 - 在当前产品语义里，目标 `agent` 就等价于独立 workspace；如果未来上游重新引入多 agent 共用 workspace 的强语义，下游集成必须重新评估 UI 和生命周期边界，不能默认兼容
 
+### 13. Chat history 分页游标与 session history HTTP 认证语义
+
+涉及文件：
+
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/protocol/schema/logs-chat.ts`
+- `src/gateway/server.chat.gateway-server-chat-b.test.ts`
+- `src/gateway/sessions-history-http.ts`
+- `src/gateway/sessions-history-http.test.ts`
+
+必须确认：
+
+- `chat.history` 协议 schema 仍然保留可选 `before` 游标字段
+- `chat.history` RPC 返回结果里，仍然会在需要翻页时返回：
+  - `hasMore`
+  - `nextBefore`
+- 历史分页仍然基于 transcript 中稳定的消息顺序游标向更旧消息翻页，不能退回成只能取最后 N 条
+- oversized / sanitized history placeholder 仍然会保留原始 `__openclaw.seq` 元数据，避免分页后游标漂移
+- session history HTTP 路径仍然把 shared-secret bearer auth 视为受信任 operator 访问，不能错误要求显式 `operator.read` scope 才能读历史
+- HTTP 与 WS 两条历史读取链路的分页和认证语义不能静默分叉
+
+背景：
+
+- 这是 2026-04-21 为 gateway chat history 向前翻页和 session history HTTP 鉴权语义补充的本地检查点
+- 下游当前依赖的是：
+  - 可以按游标连续读取更旧的 transcript 页面
+  - 使用 shared secret 的 HTTP 调用方可以直接读取 session history，而不是被 scope gate 误拦
+- 如果上游后续再改 `chat.history` 返回模型、消息清洗顺序或 trusted HTTP auth 逻辑，同步后必须先人工复核这里
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -399,6 +428,7 @@ git diff --name-only prod..HEAD -- $(git diff --name-only "$base"..prod)
 rg -n "events\\.subscribe|eventsSubscribe|eventsUnsubscribe" src/gateway
 rg -n "sessions\\.files|listSessionFilesForGateway|trackSessionFilesForGateway" src/gateway
 rg -n "OPENCLAW_GATEWAY_CHAT_DELTA_THROTTLE_MS|chat-assistant:" src/gateway/server-chat.ts
+rg -n "chat\\.history|before|nextBefore|hasMore|__openclaw\\.seq" src/gateway
 rg -n "isolatedSession|SUBAGENT_WAIT_TIMEOUT_SPIN_GUARD_MS" src/infra src/agents
 rg -n "fallbackStreamFn|resolveEmbeddedRunStreamFn|shouldUseOpenAIWebSocketTransport" src/agents
 rg -n "SERPER_API_KEY|serperBaseUrl|braveMode|withTrustedWebToolsEndpoint|legacy-bundled-web-search" src/agents src/plugins src/flows
@@ -417,6 +447,7 @@ pnpm test -- \
   src/gateway/server.health.test.ts \
   src/gateway/server.sessions.gateway-server-sessions-a.test.ts \
   src/gateway/server.chat.gateway-server-chat-b.test.ts \
+  src/gateway/sessions-history-http.test.ts \
   src/gateway/server-methods/events.test.ts \
   src/infra/heartbeat-runner.scheduler.test.ts \
   src/infra/heartbeat-runner.returns-default-unset.test.ts \

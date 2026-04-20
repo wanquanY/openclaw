@@ -95,6 +95,13 @@ type TranscriptAppendResult = {
   error?: string;
 };
 
+type ChatHistoryMessage = Record<string, unknown> & {
+  __openclaw?: {
+    seq?: number;
+    [key: string]: unknown;
+  };
+};
+
 type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
@@ -581,6 +588,81 @@ function truncateChatHistoryText(
   return {
     text: `${text.slice(0, maxChars)}\n...(truncated)...`,
     truncated: true,
+  };
+}
+
+function resolveChatHistoryMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const seq = (message as ChatHistoryMessage).__openclaw?.seq;
+  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
+}
+
+function paginateChatHistoryMessages(params: {
+  messages: unknown[];
+  limit: number;
+  before?: string;
+}): {
+  messages: unknown[];
+  hasMore: boolean;
+  nextBefore?: string;
+} {
+  const { messages, limit, before } = params;
+  const normalizedLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const cursorRaw = typeof before === "string" ? before.trim() : "";
+  const cursorSeq = cursorRaw ? Number.parseInt(cursorRaw, 10) : Number.NaN;
+  let endExclusive = messages.length;
+
+  if (Number.isFinite(cursorSeq) && cursorSeq > 0) {
+    endExclusive = messages.findIndex((message, index) => {
+      const seq = resolveChatHistoryMessageSeq(message);
+      if (typeof seq === "number") {
+        return seq >= cursorSeq;
+      }
+      return index + 1 >= cursorSeq;
+    });
+    if (endExclusive < 0) {
+      endExclusive = messages.length;
+    }
+  }
+
+  const start = Math.max(0, endExclusive - normalizedLimit);
+  const pagedMessages = messages.slice(start, endExclusive);
+  const firstSeq = resolveChatHistoryMessageSeq(pagedMessages[0]);
+  return {
+    messages: pagedMessages,
+    hasMore: start > 0,
+    ...(start > 0 && typeof firstSeq === "number" ? { nextBefore: String(firstSeq) } : {}),
+  };
+}
+
+function resolveVisibleChatHistoryPaging(params: {
+  pagedMessages: unknown[];
+  visibleMessages: unknown[];
+  hasMore: boolean;
+  nextBefore?: string;
+}): {
+  hasMore: boolean;
+  nextBefore?: string;
+} {
+  const originalFirstSeq = resolveChatHistoryMessageSeq(params.pagedMessages[0]);
+  const visibleFirstSeq = resolveChatHistoryMessageSeq(params.visibleMessages[0]);
+  const hiddenWithinPage =
+    typeof originalFirstSeq === "number" &&
+    typeof visibleFirstSeq === "number" &&
+    visibleFirstSeq > originalFirstSeq;
+
+  if (hiddenWithinPage) {
+    return {
+      hasMore: true,
+      nextBefore: String(visibleFirstSeq),
+    };
+  }
+
+  return {
+    hasMore: params.hasMore,
+    ...(params.nextBefore ? { nextBefore: params.nextBefore } : {}),
   };
 }
 
@@ -1164,11 +1246,19 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     typeof (message as { timestamp?: unknown }).timestamp === "number"
       ? (message as { timestamp: number }).timestamp
       : Date.now();
+  const sourceMeta =
+    message && typeof message === "object" && (message as ChatHistoryMessage).__openclaw
+      ? { ...(message as ChatHistoryMessage).__openclaw }
+      : {};
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
-    __openclaw: { truncated: true, reason: "oversized" },
+    __openclaw: {
+      ...sourceMeta,
+      truncated: true,
+      reason: "oversized",
+    },
   };
 }
 
@@ -1635,10 +1725,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, before } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1656,8 +1747,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
+    const paged = paginateChatHistoryMessages({
+      messages: rawMessages,
+      limit: max,
+      before,
+    });
+    const sanitized = stripEnvelopeFromMessages(paged.messages);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
     );
@@ -1669,6 +1764,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const paging = resolveVisibleChatHistoryPaging({
+      pagedMessages: normalized,
+      visibleMessages: bounded.messages,
+      hasMore: paged.hasMore,
+      nextBefore: paged.nextBefore,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1691,6 +1792,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      hasMore: paging.hasMore,
+      nextBefore: paging.nextBefore,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
