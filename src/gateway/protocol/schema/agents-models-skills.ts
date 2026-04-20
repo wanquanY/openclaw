@@ -220,6 +220,7 @@ export const SkillsInstallParamsSchema = Type.Union([
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
+      agentId: Type.Optional(NonEmptyString),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -230,9 +231,11 @@ export const SkillsUpdateParamsSchema = Type.Union([
   Type.Object(
     {
       skillKey: NonEmptyString,
+      agentId: Type.Optional(NonEmptyString),
       enabled: Type.Optional(Type.Boolean()),
       apiKey: Type.Optional(Type.String()),
       env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+      config: Type.Optional(Type.Record(NonEmptyString, Type.Unknown())),
     },
     { additionalProperties: false },
   ),
@@ -241,10 +244,43 @@ export const SkillsUpdateParamsSchema = Type.Union([
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),
+      agentId: Type.Optional(NonEmptyString),
     },
     { additionalProperties: false },
   ),
 ]);
+
+export const SkillsImportParamsSchema = Type.Union([
+  Type.Object(
+    {
+      source: Type.Literal("file"),
+      filePath: NonEmptyString,
+      force: Type.Optional(Type.Boolean()),
+      agentId: Type.Optional(NonEmptyString),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      source: Type.Literal("remote"),
+      package: NonEmptyString,
+      registry: Type.Optional(NonEmptyString),
+      force: Type.Optional(Type.Boolean()),
+      agentId: Type.Optional(NonEmptyString),
+      timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+export const SkillsUninstallParamsSchema = Type.Object(
+  {
+    skillKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
 
 export const SkillsSearchParamsSchema = Type.Object(
   {

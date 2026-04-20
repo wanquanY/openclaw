@@ -90,11 +90,13 @@ function collectSkillAssignments(params: {
   entries: Record<string, SkillEntryLike>;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
+  pathPrefix?: string;
 }): void {
+  const pathPrefix = params.pathPrefix ?? "skills.entries";
   for (const [skillKey, entry] of Object.entries(params.entries)) {
     collectSecretInputAssignment({
       value: entry.apiKey,
-      path: `skills.entries.${skillKey}.apiKey`,
+      path: `${pathPrefix}.${skillKey}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -103,6 +105,49 @@ function collectSkillAssignments(params: {
       apply: (value) => {
         entry.apiKey = value;
       },
+    });
+  }
+}
+
+function collectAgentSkillAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const agents = params.config.agents as Record<string, unknown> | undefined;
+  if (!isRecord(agents)) {
+    return;
+  }
+  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
+  const defaultsSkillSettings = isRecord(defaultsConfig?.skillSettings)
+    ? (defaultsConfig.skillSettings as Record<string, SkillEntryLike>)
+    : undefined;
+  if (defaultsSkillSettings) {
+    collectSkillAssignments({
+      entries: defaultsSkillSettings,
+      defaults: params.defaults,
+      context: params.context,
+      pathPrefix: "agents.defaults.skillSettings",
+    });
+  }
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  for (let index = 0; index < list.length; index += 1) {
+    const rawAgent = list[index];
+    if (!isRecord(rawAgent)) {
+      continue;
+    }
+    const skillSettings = isRecord(rawAgent.skillSettings)
+      ? (rawAgent.skillSettings as Record<string, SkillEntryLike>)
+      : undefined;
+    if (!skillSettings) {
+      continue;
+    }
+    collectSkillAssignments({
+      entries: skillSettings,
+      defaults: params.defaults,
+      context: params.context,
+      pathPrefix: `agents.list.${index}.skillSettings`,
     });
   }
 }
@@ -634,6 +679,7 @@ export function collectCoreConfigAssignments(params: {
       context: params.context,
     });
   }
+  collectAgentSkillAssignments(params);
 
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);

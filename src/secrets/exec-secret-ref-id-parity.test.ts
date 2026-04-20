@@ -104,6 +104,12 @@ describe("exec SecretRef id parity", () => {
     if (canonicalId.startsWith("skills.entries.")) {
       return "skills";
     }
+    if (canonicalId.startsWith("agents.defaults.skillSettings.")) {
+      return "skills";
+    }
+    if (canonicalId.startsWith("agents.list[].skillSettings.")) {
+      return "skills";
+    }
     if (canonicalId.startsWith("talk.")) {
       return "talk";
     }

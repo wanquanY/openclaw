@@ -181,6 +181,12 @@ function resolveCoverageBatchKey(entry: SecretRegistryEntry): string {
   if (entry.id.startsWith("skills.entries.")) {
     return "skills.entries";
   }
+  if (entry.id.startsWith("agents.defaults.skillSettings.")) {
+    return "agents.skillSettings";
+  }
+  if (entry.id.startsWith("agents.list[].skillSettings.")) {
+    return "agents.skillSettings";
+  }
   if (entry.id.startsWith("talk.providers.")) {
     return "talk.providers";
   }

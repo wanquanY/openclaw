@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
+import { persistCompressedSessionMemory } from "../../config/sessions/compressed-memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshot,
@@ -17,7 +18,6 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
-import { persistCompressedSessionMemory } from "../../config/sessions/compressed-memory.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
@@ -444,10 +444,12 @@ export async function compactEmbeddedPiSessionDirect(
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          agentId: effectiveSkillAgentId,
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          agentId: effectiveSkillAgentId,
         });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,

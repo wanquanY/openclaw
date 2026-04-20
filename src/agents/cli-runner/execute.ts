@@ -253,6 +253,7 @@ export async function executePreparedCliRun(
         ? applySkillEnvOverridesFromSnapshot({
             snapshot: params.skillsSnapshot,
             config: params.config,
+            agentId: params.agentId,
           })
         : undefined;
       try {
@@ -467,7 +468,10 @@ export async function executePreparedCliRun(
           ...parsed,
           rawText,
           finalPromptText: prompt,
-          text: applyPluginTextReplacements(rawText, context.backendResolved.textTransforms?.output),
+          text: applyPluginTextReplacements(
+            rawText,
+            context.backendResolved.textTransforms?.output,
+          ),
         };
       } finally {
         restoreSkillEnv?.();

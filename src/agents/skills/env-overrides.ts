@@ -216,14 +216,20 @@ function createEnvReverter(updates: EnvUpdate[]) {
   };
 }
 
-export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
+export function applySkillEnvOverrides(params: {
+  skills: SkillEntry[];
+  config?: OpenClawConfig;
+  agentId?: string;
+}) {
   const { skills } = params;
   const config = resolveSkillRuntimeConfig(params.config);
   const updates: EnvUpdate[] = [];
 
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
+    const skillConfig = resolveSkillConfig(config, skillKey, {
+      agentId: params.agentId,
+    });
     if (!skillConfig) {
       continue;
     }
@@ -243,6 +249,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
 export function applySkillEnvOverridesFromSnapshot(params: {
   snapshot?: SkillSnapshot;
   config?: OpenClawConfig;
+  agentId?: string;
 }) {
   const { snapshot } = params;
   const config = resolveSkillRuntimeConfig(params.config);
@@ -252,7 +259,9 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const updates: EnvUpdate[] = [];
 
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
+    const skillConfig = resolveSkillConfig(config, skill.name, {
+      agentId: params.agentId,
+    });
     if (!skillConfig) {
       continue;
     }

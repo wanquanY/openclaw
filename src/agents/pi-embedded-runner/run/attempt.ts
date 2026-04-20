@@ -25,6 +25,7 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama-runtime.js";
+import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-model-shared.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -54,7 +55,6 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-model-shared.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
@@ -109,6 +109,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -173,7 +174,6 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import { replayMetadataFromState } from "../replay-state.js";
 import { resolveEmbeddedRunStreamFn } from "./stream-selection.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -417,16 +417,19 @@ export async function runEmbeddedAttempt(
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
+      agentId: params.agentId,
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          agentId: params.agentId,
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          agentId: params.agentId,
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
@@ -434,6 +437,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      agentId: params.agentId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -604,9 +608,7 @@ export async function runEmbeddedAttempt(
         if (!runtimeCapabilities) {
           runtimeCapabilities = [];
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
+        if (!runtimeCapabilities.some((cap) => cap.trim().toLowerCase() === "inlinebuttons")) {
           runtimeCapabilities.push("inlineButtons");
         }
       }

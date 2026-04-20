@@ -6,6 +6,7 @@ import {
   AgentSandboxSchema,
   AgentEmbeddedHarnessSchema,
   AgentModelSchema,
+  AgentSkillSettingsEntrySchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
@@ -46,6 +47,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
+    skillSettings: z.record(z.string(), AgentSkillSettingsEntrySchema).optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
     skipBootstrap: z.boolean().optional(),

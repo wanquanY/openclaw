@@ -6,7 +6,7 @@ import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
-import { stripEnvelope } from "./chat-sanitize.js";
+import { stripEnvelope, stripEnvelopeFromMessage } from "./chat-sanitize.js";
 import {
   resolveSessionTranscriptCandidates,
   archiveFileOnDisk,
@@ -300,7 +300,8 @@ function extractFirstUserMessageFromTranscriptChunk(
       if (opts?.includeInterSession !== true && hasInterSessionUserProvenance(msg)) {
         continue;
       }
-      const text = extractTextFromContent(msg.content);
+      const stripped = stripEnvelopeFromMessage(msg) as TranscriptMessage | undefined;
+      const text = extractTextFromContent(stripped?.content ?? msg.content);
       if (text) {
         return text;
       }
