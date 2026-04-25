@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Context, Message, StopReason } from "@mariozechner/pi-ai";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { isComputerUseObservationContinuationMessage } from "../computer-use/observation-continuation.js";
 import {
   encodeAssistantTextSignature,
   normalizeAssistantPhase,
@@ -34,6 +36,7 @@ export type PlannedTurnInput = {
   inputItems: InputItem[];
   previousResponseId?: string;
   mode: "incremental_tool_results" | "full_context_initial" | "full_context_restart";
+  containsComputerUseObservationContinuation?: boolean;
 };
 
 function toNonEmptyString(value: unknown): string | null {
@@ -273,14 +276,20 @@ export function planTurnInput(params: {
 }): PlannedTurnInput {
   if (params.previousResponseId && params.lastContextLength > 0) {
     const newMessages = params.context.messages.slice(params.lastContextLength);
-    const toolResults = newMessages.filter(
-      (message) => (message as AnyMessage).role === "toolResult",
+    const incrementalMessages = newMessages.filter(
+      (message) =>
+        (message as AnyMessage).role === "toolResult" ||
+        isComputerUseObservationContinuationMessage(message as AgentMessage),
     );
-    if (toolResults.length > 0) {
+    const hasComputerUseObservationContinuation = incrementalMessages.some((message) =>
+      isComputerUseObservationContinuationMessage(message as AgentMessage),
+    );
+    if (incrementalMessages.some((message) => (message as AnyMessage).role === "toolResult")) {
       return {
         mode: "incremental_tool_results",
         previousResponseId: params.previousResponseId,
-        inputItems: convertMessagesToInputItems(toolResults, params.model),
+        inputItems: convertMessagesToInputItems(incrementalMessages, params.model),
+        containsComputerUseObservationContinuation: hasComputerUseObservationContinuation,
       };
     }
     return {
@@ -494,7 +503,7 @@ export function buildAssistantMessageFromResponse(
           const shouldIncludeText = hasFinalAnswerText
             ? itemPhase === "final_answer"
             : hasExplicitPhasedAssistantText
-              ? itemPhase === undefined
+              ? itemPhase !== undefined
               : true;
           if (!shouldIncludeText) {
             continue;

@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadConfigMock = vi.fn(() => ({}));
-const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const loadConfigMock = vi.fn<() => Record<string, unknown>>(() => ({}));
+const listAgentIdsMock = vi.fn<(cfg?: unknown) => string[]>(() => ["main"]);
+const resolveDefaultAgentIdMock = vi.fn<(cfg?: unknown) => string>(() => "main");
+const resolveAgentWorkspaceDirMock = vi.fn<(cfg: unknown, agentId: string) => string>(
+  () => "/tmp/workspace",
+);
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
@@ -13,9 +16,10 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: vi.fn(() => ["main"]),
-  resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  listAgentIds: (cfg: unknown) => listAgentIdsMock(cfg),
+  resolveDefaultAgentId: (cfg: unknown) => resolveDefaultAgentIdMock(cfg),
+  resolveAgentWorkspaceDir: (cfg: unknown, agentId: string) =>
+    resolveAgentWorkspaceDirMock(cfg, agentId),
 }));
 
 vi.mock("../../agents/skills-clawhub.js", () => ({
@@ -32,6 +36,7 @@ const { skillsHandlers } = await import("./skills.js");
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
+    listAgentIdsMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     installSkillFromClawHubMock.mockReset();
@@ -39,6 +44,7 @@ describe("skills gateway handlers (clawhub)", () => {
     updateSkillsFromClawHubMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
+    listAgentIdsMock.mockReturnValue(["main"]);
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
   });
@@ -183,6 +189,65 @@ describe("skills gateway handlers (clawhub)", () => {
           },
         ],
       },
+    });
+  });
+
+  it("targets the requested agent workspace for ClawHub install and update", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "writer"]);
+    resolveAgentWorkspaceDirMock.mockImplementation((cfg: unknown, agentId: string) =>
+      agentId === "writer" ? "/tmp/writer-workspace" : "/tmp/workspace",
+    );
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/writer-workspace/skills/calendar",
+    });
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/writer-workspace/skills/calendar",
+      },
+    ]);
+
+    await skillsHandlers["skills.install"]({
+      params: {
+        source: "clawhub",
+        slug: "calendar",
+        agentId: "writer",
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: () => undefined,
+    });
+    await skillsHandlers["skills.update"]({
+      params: {
+        source: "clawhub",
+        slug: "calendar",
+        agentId: "writer",
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: {} as never,
+      respond: () => undefined,
+    });
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/writer-workspace",
+      slug: "calendar",
+      version: undefined,
+      force: false,
+    });
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/writer-workspace",
+      slug: "calendar",
     });
   });
 

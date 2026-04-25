@@ -114,6 +114,25 @@ describe("readFirstUserMessageFromTranscript", () => {
     expect(result).toBe("First user question");
   });
 
+  test("strips injected inbound metadata blocks before deriving the first user message", () => {
+    const sessionId = "test-session-inbound-meta";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content:
+            'Conversation info (untrusted metadata):\n```json\n{"message_id":"123"}\n```\n\nSender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readFirstUserMessageFromTranscript(sessionId, storePath);
+    expect(result).toBe("hi");
+  });
+
   test("skips inter-session user messages by default", () => {
     const sessionId = "test-session-inter-session";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

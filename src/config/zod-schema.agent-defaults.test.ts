@@ -55,6 +55,15 @@ describe("agent defaults schema", () => {
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
   });
 
+  it("accepts compaction.truncateAfterCompaction", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        truncateAfterCompaction: false,
+      },
+    })!;
+    expect(result.compaction?.truncateAfterCompaction).toBe(false);
+  });
+
   it("accepts positive heartbeat timeoutSeconds on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({
       heartbeat: { timeoutSeconds: 45 },

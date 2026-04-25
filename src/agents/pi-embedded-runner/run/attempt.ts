@@ -25,9 +25,11 @@ import {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama-runtime.js";
+import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-model-shared.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -54,7 +56,6 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
-import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-model-shared.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
@@ -98,6 +99,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+import { installComputerUseObservationContext } from "../computer-use-observation-context.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
@@ -109,6 +111,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -173,7 +176,6 @@ import {
 } from "./compaction-timeout.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import { replayMetadataFromState } from "../replay-state.js";
 import { resolveEmbeddedRunStreamFn } from "./stream-selection.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -417,16 +419,19 @@ export async function runEmbeddedAttempt(
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
+      agentId: params.agentId,
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
           config: params.config,
+          agentId: params.agentId,
         })
       : applySkillEnvOverrides({
           skills: skillEntries ?? [],
           config: params.config,
+          agentId: params.agentId,
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
@@ -434,6 +439,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      agentId: params.agentId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -531,6 +537,7 @@ export async function runEmbeddedAttempt(
           modelCompat: params.model.compat,
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+          computerUse: params.computerUse,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
@@ -548,11 +555,17 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+    defaultRuntime.log?.(
+      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
+    );
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
     });
+    defaultRuntime.log?.(
+      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
+    );
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
@@ -604,9 +617,7 @@ export async function runEmbeddedAttempt(
         if (!runtimeCapabilities) {
           runtimeCapabilities = [];
         }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
+        if (!runtimeCapabilities.some((cap) => cap.trim().toLowerCase() === "inlinebuttons")) {
           runtimeCapabilities.push("inlineButtons");
         }
       }
@@ -771,6 +782,7 @@ export async function runEmbeddedAttempt(
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let removeComputerUseObservationContext: (() => void) | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     try {
       await repairSessionFileIfNeeded({
@@ -919,6 +931,16 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      if (modelHasVision) {
+        removeComputerUseObservationContext = installComputerUseObservationContext({
+          agent: activeSession.agent,
+          onInjected: ({ totalMessages }) => {
+            defaultRuntime.log?.(
+              `[computer_use_trace] stage=embedded_attempt_observation_context session=${params.sessionKey ?? params.sessionId} totalMessages=${totalMessages}`,
+            );
+          },
+        });
+      }
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1911,6 +1933,7 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       removeToolResultContextGuard?.();
+      removeComputerUseObservationContext?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,

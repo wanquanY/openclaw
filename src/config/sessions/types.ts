@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { ComputerUseSessionConfig } from "../../computer-use/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
@@ -190,6 +191,8 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  computerUse?: ComputerUseSessionConfig;
+  clientCapabilityBindings?: Record<string, SessionClientCapabilityBinding>;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
@@ -286,6 +289,16 @@ export type SessionEntry = {
   acp?: SessionAcpMeta;
 };
 
+export type SessionClientCapabilityBinding = {
+  deviceId: string;
+  clientId?: string;
+  clientMode?: string;
+  displayName?: string;
+  platform?: string;
+  commands?: string[];
+  boundAt: number;
+};
+
 function isSessionPluginTraceLine(line: string): boolean {
   const trimmed = line.trim();
   return trimmed.startsWith("🔎 ") || /(?:^|\s)(?:Debug|Trace):/.test(trimmed);
@@ -363,6 +376,107 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
     next.modelProvider = normalizedProvider;
   }
   return next;
+}
+
+export function normalizeSessionClientCapabilityBindings(entry: SessionEntry): SessionEntry {
+  const bindings = entry.clientCapabilityBindings;
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) {
+    if (entry.clientCapabilityBindings !== undefined) {
+      const next = { ...entry };
+      delete next.clientCapabilityBindings;
+      return next;
+    }
+    return entry;
+  }
+
+  let nextBindings: Record<string, SessionClientCapabilityBinding> | undefined;
+  for (const [capability, raw] of Object.entries(bindings)) {
+    const normalizedCapability = normalizeOptionalString(capability);
+    if (!normalizedCapability || !raw || typeof raw !== "object" || Array.isArray(raw)) {
+      if (!nextBindings) {
+        nextBindings = {};
+      }
+      continue;
+    }
+
+    const deviceId = normalizeOptionalString((raw as { deviceId?: unknown }).deviceId);
+    if (!deviceId) {
+      if (!nextBindings) {
+        nextBindings = {};
+      }
+      continue;
+    }
+
+    const commandsRaw = Array.isArray((raw as { commands?: unknown }).commands)
+      ? ((raw as { commands?: unknown[] }).commands ?? [])
+      : [];
+    const commands = Array.from(
+      new Set(
+        commandsRaw
+          .map((value) => normalizeOptionalString(typeof value === "string" ? value : undefined))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const boundAtRaw = (raw as { boundAt?: unknown }).boundAt;
+    const boundAt =
+      typeof boundAtRaw === "number" && Number.isFinite(boundAtRaw) && boundAtRaw >= 0
+        ? Math.trunc(boundAtRaw)
+        : Date.now();
+    const normalizedBinding: SessionClientCapabilityBinding = {
+      deviceId,
+      ...(normalizeOptionalString((raw as { clientId?: unknown }).clientId)
+        ? { clientId: normalizeOptionalString((raw as { clientId?: unknown }).clientId) }
+        : {}),
+      ...(normalizeOptionalString((raw as { clientMode?: unknown }).clientMode)
+        ? { clientMode: normalizeOptionalString((raw as { clientMode?: unknown }).clientMode) }
+        : {}),
+      ...(normalizeOptionalString((raw as { displayName?: unknown }).displayName)
+        ? { displayName: normalizeOptionalString((raw as { displayName?: unknown }).displayName) }
+        : {}),
+      ...(normalizeOptionalString((raw as { platform?: unknown }).platform)
+        ? { platform: normalizeOptionalString((raw as { platform?: unknown }).platform) }
+        : {}),
+      ...(commands.length > 0 ? { commands } : {}),
+      boundAt,
+    };
+
+    if (!nextBindings) {
+      nextBindings = {};
+    }
+    nextBindings[normalizedCapability] = normalizedBinding;
+  }
+
+  const nextKeys = nextBindings ? Object.keys(nextBindings) : [];
+  if (nextKeys.length === 0) {
+    if (entry.clientCapabilityBindings !== undefined) {
+      const next = { ...entry };
+      delete next.clientCapabilityBindings;
+      return next;
+    }
+    return entry;
+  }
+
+  const resolvedNextBindings = nextBindings ?? {};
+  const prevKeys = Object.keys(bindings);
+  let unchanged = prevKeys.length === nextKeys.length;
+  if (unchanged) {
+    for (const key of prevKeys) {
+      const prevBinding = bindings[key];
+      const nextBinding = resolvedNextBindings[key];
+      if (!nextBinding || JSON.stringify(prevBinding) !== JSON.stringify(nextBinding)) {
+        unchanged = false;
+        break;
+      }
+    }
+  }
+  if (unchanged) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    clientCapabilityBindings: resolvedNextBindings,
+  };
 }
 
 export function setSessionRuntimeModel(

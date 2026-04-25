@@ -148,6 +148,9 @@ export function createFollowupRunner(params: {
         ? queued
         : { ...queued, run: { ...queued.run, config: runtimeConfig } };
     const run = effectiveQueued.run;
+    defaultRuntime.log?.(
+      `[computer_use_trace] stage=followup_runner session=${run.sessionKey ?? run.sessionId} enabled=${run.computerUse?.enabled === true} scope=${run.computerUse?.scope?.type ?? "n/a"} modelPolicy=${run.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+    );
     const replyOperation = createReplyOperation({
       sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
@@ -250,6 +253,7 @@ export function createFollowupRunner(params: {
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
                 execOverrides: run.execOverrides,
+                computerUse: run.computerUse,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,

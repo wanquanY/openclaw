@@ -187,6 +187,14 @@ describe("resolveCommandsSystemPromptBundle", () => {
         groupChannel: "#target",
         space: "target-space",
         spawnedBy: "agent:target-parent",
+        computerUse: {
+          enabled: true,
+          mode: "plan_and_act",
+          scope: { type: "full_desktop" },
+          hostPolicy: "local_only",
+          modelPolicy: { mode: "follow_user_model" },
+          approvals: { highRiskActionsRequireConfirm: true },
+        },
       },
     } as HandleCommandsParams["sessionStore"];
     params.sessionKey = "agent:target:telegram:direct:target-session";
@@ -204,6 +212,14 @@ describe("resolveCommandsSystemPromptBundle", () => {
         groupChannel: "#target",
         groupSpace: "target-space",
         spawnedBy: "agent:target-parent",
+        computerUse: {
+          enabled: true,
+          mode: "plan_and_act",
+          scope: { type: "full_desktop" },
+          hostPolicy: "local_only",
+          modelPolicy: { mode: "follow_user_model" },
+          approvals: { highRiskActionsRequireConfirm: true },
+        },
       }),
     );
   });

@@ -40,6 +40,10 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import {
+  applySessionClientCapabilityBinding,
+  buildSessionClientCapabilityBindingFromClient,
+} from "../client-capability-bindings.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -64,11 +68,11 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
-import { listSessionFilesForGateway, trackSessionFilesForGateway } from "../session-files.js";
 import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { listSessionFilesForGateway, trackSessionFilesForGateway } from "../session-files.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -1338,15 +1342,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const computerUseBinding = Object.prototype.hasOwnProperty.call(p, "computerUse")
+      ? buildSessionClientCapabilityBindingFromClient({
+          client,
+          capability: "computer_use",
+        })
+      : undefined;
     const applied = await updateSessionStore(storePath, async (store) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
-      return await applySessionsPatchToStore({
+      const result = await applySessionsPatchToStore({
         cfg,
         store,
         storeKey: primaryKey,
         patch: p,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (result.ok && Object.prototype.hasOwnProperty.call(p, "computerUse")) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: result.entry,
+          capability: "computer_use",
+          binding: computerUseBinding,
+          enabled: result.entry.computerUse?.enabled === true,
+        });
+        result.entry = nextEntry;
+        store[primaryKey] = nextEntry;
+      }
+      return result;
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);

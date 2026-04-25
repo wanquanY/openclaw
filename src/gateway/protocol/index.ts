@@ -132,6 +132,10 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type PluginApprovalRequestParams,
+  PluginApprovalRequestParamsSchema,
+  type PluginApprovalResolveParams,
+  PluginApprovalResolveParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -150,6 +154,10 @@ import {
   MessageActionParamsSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
+  type ClientInvokeParams,
+  ClientInvokeParamsSchema,
+  type ClientInvokeResultParams,
+  ClientInvokeResultParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
   type NodeEventParams,
@@ -273,6 +281,8 @@ import {
   SkillsDetailParamsSchema,
   type SkillsDetailResult,
   SkillsDetailResultSchema,
+  type SkillsImportParams,
+  SkillsImportParamsSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
   type SkillsSearchParams,
@@ -281,6 +291,8 @@ import {
   SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
+  type SkillsUninstallParams,
+  SkillsUninstallParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
   type ToolsCatalogParams,
@@ -333,9 +345,8 @@ export const validateConnectParams = ajv.compile<ConnectParams>(ConnectParamsSch
 export const validateRequestFrame = ajv.compile<RequestFrame>(RequestFrameSchema);
 export const validateResponseFrame = ajv.compile<ResponseFrame>(ResponseFrameSchema);
 export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
-export const validateMessageActionParams = ajv.compile<MessageActionParams>(
-  MessageActionParamsSchema,
-);
+export const validateMessageActionParams =
+  ajv.compile<MessageActionParams>(MessageActionParamsSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
@@ -375,6 +386,10 @@ export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
 export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
+export const validateClientInvokeParams = ajv.compile<ClientInvokeParams>(ClientInvokeParamsSchema);
+export const validateClientInvokeResultParams = ajv.compile<ClientInvokeResultParams>(
+  ClientInvokeResultParamsSchema,
+);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
   NodeInvokeResultParamsSchema,
@@ -433,8 +448,9 @@ export const validateSessionsCompactionGetParams = ajv.compile<SessionsCompactio
 export const validateSessionsCompactionBranchParams = ajv.compile<SessionsCompactionBranchParams>(
   SessionsCompactionBranchParamsSchema,
 );
-export const validateSessionsCompactionRestoreParams =
-  ajv.compile<SessionsCompactionRestoreParams>(SessionsCompactionRestoreParamsSchema);
+export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompactionRestoreParams>(
+  SessionsCompactionRestoreParamsSchema,
+);
 export const validateSessionsFilesListParams = ajv.compile<SessionsFilesListParams>(
   SessionsFilesListParamsSchema,
 );
@@ -477,8 +493,12 @@ export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
+export const validateSkillsImportParams = ajv.compile<SkillsImportParams>(SkillsImportParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
+export const validateSkillsUninstallParams = ajv.compile<SkillsUninstallParams>(
+  SkillsUninstallParamsSchema,
+);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
@@ -527,6 +547,12 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 );
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
+);
+export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalRequestParams>(
+  PluginApprovalRequestParamsSchema,
+);
+export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
+  PluginApprovalResolveParamsSchema,
 );
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
@@ -602,6 +628,8 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  ClientInvokeParamsSchema,
+  ClientInvokeResultParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -694,7 +722,9 @@ export {
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
+  SkillsImportParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsUninstallParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -794,8 +824,12 @@ export type {
   SkillsSearchResult,
   SkillsDetailParams,
   SkillsDetailResult,
+  SkillsImportParams,
   SkillsInstallParams,
+  SkillsUninstallParams,
   SkillsUpdateParams,
+  ClientInvokeParams,
+  ClientInvokeResultParams,
   NodePairRejectParams,
   NodePairVerifyParams,
   NodeListParams,

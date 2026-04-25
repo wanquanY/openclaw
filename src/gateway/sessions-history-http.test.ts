@@ -134,6 +134,25 @@ async function fetchSessionHistory(
   );
 }
 
+async function preflightSessionHistory(
+  port: number,
+  sessionKey: string,
+  params?: {
+    origin?: string;
+    requestHeaders?: string;
+  },
+) {
+  return fetch(`http://127.0.0.1:${port}/sessions/${encodeURIComponent(sessionKey)}/history`, {
+    method: "OPTIONS",
+    headers: {
+      Origin: params?.origin ?? "http://localhost:1420",
+      "Access-Control-Request-Method": "GET",
+      "Access-Control-Request-Headers":
+        params?.requestHeaders ?? "authorization, x-openclaw-scopes, x-client-transport-actual",
+    },
+  });
+}
+
 async function withGatewayHarness<T>(
   run: (harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>) => Promise<T>,
 ) {
@@ -289,6 +308,50 @@ describe("session history HTTP endpoints", () => {
       ).toMatchObject({
         seq: 1,
       });
+    });
+  });
+
+  test("answers CORS preflight for allowed loopback browser origins", async () => {
+    await seedSession({ text: "hello from history" });
+    await withGatewayHarness(async (harness) => {
+      const res = await preflightSessionHistory(harness.port, "agent:main:main");
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:1420");
+      expect(res.headers.get("access-control-allow-methods")).toContain("GET");
+      expect(res.headers.get("access-control-allow-headers")).toContain("authorization");
+      expect(res.headers.get("vary")).toContain("Origin");
+    });
+  });
+
+  test("rejects CORS preflight for disallowed browser origins", async () => {
+    await seedSession({ text: "hello from history" });
+    await withGatewayHarness(async (harness) => {
+      const res = await preflightSessionHistory(harness.port, "agent:main:main", {
+        origin: "https://evil.example",
+      });
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: "origin not allowed",
+        },
+      });
+    });
+  });
+
+  test("returns CORS headers on browser-origin session history GET responses", async () => {
+    await seedSession({ text: "hello from history" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: {
+          Origin: "http://localhost:1420",
+          ...AUTH_HEADER,
+        },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe("http://localhost:1420");
+      expect(res.headers.get("vary")).toContain("Origin");
     });
   });
 
@@ -679,7 +742,7 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("rejects session history when operator.read is not requested", async () => {
+  test("treats shared-secret bearer auth as trusted operator access for session history HTTP", async () => {
     await seedSession({ text: "scope-guarded history" });
 
     const started = await startServerWithClient("test-gateway-token-1234567890");
@@ -707,13 +770,15 @@ describe("session history HTTP endpoints", () => {
           },
         },
       );
-      expect(httpHistory.status).toBe(403);
+      expect(httpHistory.status).toBe(200);
       await expect(httpHistory.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+        sessionKey: "agent:main:main",
+        hasMore: false,
+        messages: [
+          {
+            content: [{ text: "scope-guarded history" }],
+          },
+        ],
       });
 
       const httpHistoryWithoutScopes = await fetch(
@@ -722,13 +787,15 @@ describe("session history HTTP endpoints", () => {
           headers: AUTH_HEADER,
         },
       );
-      expect(httpHistoryWithoutScopes.status).toBe(403);
+      expect(httpHistoryWithoutScopes.status).toBe(200);
       await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
+        sessionKey: "agent:main:main",
+        hasMore: false,
+        messages: [
+          {
+            content: [{ text: "scope-guarded history" }],
+          },
+        ],
       });
     } finally {
       ws.close();

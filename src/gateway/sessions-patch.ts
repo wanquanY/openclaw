@@ -17,6 +17,7 @@ import {
   normalizeUsageDisplay,
   supportsXHighThinking,
 } from "../auto-reply/thinking.js";
+import { normalizeComputerUseSessionConfig } from "../computer-use/types.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -319,7 +320,7 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.titleGeneratedAt;
     } else if (raw !== undefined) {
-      const numeric = Number(raw);
+      const numeric = raw;
       if (!Number.isFinite(numeric) || numeric < 0) {
         return invalid("invalid titleGeneratedAt (use an integer >= 0)");
       }
@@ -493,6 +494,19 @@ export async function applySessionsPatchToStore(params: {
         return invalid("invalid execNode: empty");
       }
       next.execNode = trimmed;
+    }
+  }
+
+  if ("computerUse" in patch) {
+    const raw = patch.computerUse;
+    if (raw === null) {
+      delete next.computerUse;
+    } else if (raw !== undefined) {
+      const normalized = normalizeComputerUseSessionConfig(raw);
+      if (!normalized) {
+        return invalid("invalid computerUse config");
+      }
+      next.computerUse = normalized;
     }
   }
 

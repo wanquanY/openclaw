@@ -11,7 +11,9 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
+import { normalizeComputerUseSessionConfig } from "../../computer-use/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -50,6 +52,10 @@ import {
 import { MediaOffloadError } from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
+import {
+  applySessionClientCapabilityBinding,
+  buildSessionClientCapabilityBindingFromClient,
+} from "../client-capability-bindings.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -72,10 +78,12 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewayModelSupportsImages,
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -95,6 +103,13 @@ type TranscriptAppendResult = {
   error?: string;
 };
 
+type ChatHistoryMessage = Record<string, unknown> & {
+  __openclaw?: {
+    seq?: number;
+    [key: string]: unknown;
+  };
+};
+
 type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
@@ -102,6 +117,7 @@ type AbortedPartialSnapshot = {
   sessionId: string;
   text: string;
   abortOrigin: AbortOrigin;
+  startedAtMs?: number;
 };
 
 type ChatAbortRequester = {
@@ -581,6 +597,81 @@ function truncateChatHistoryText(
   return {
     text: `${text.slice(0, maxChars)}\n...(truncated)...`,
     truncated: true,
+  };
+}
+
+function resolveChatHistoryMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const seq = (message as ChatHistoryMessage).__openclaw?.seq;
+  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
+}
+
+function paginateChatHistoryMessages(params: {
+  messages: unknown[];
+  limit: number;
+  before?: string;
+}): {
+  messages: unknown[];
+  hasMore: boolean;
+  nextBefore?: string;
+} {
+  const { messages, limit, before } = params;
+  const normalizedLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+  const cursorRaw = typeof before === "string" ? before.trim() : "";
+  const cursorSeq = cursorRaw ? Number.parseInt(cursorRaw, 10) : Number.NaN;
+  let endExclusive = messages.length;
+
+  if (Number.isFinite(cursorSeq) && cursorSeq > 0) {
+    endExclusive = messages.findIndex((message, index) => {
+      const seq = resolveChatHistoryMessageSeq(message);
+      if (typeof seq === "number") {
+        return seq >= cursorSeq;
+      }
+      return index + 1 >= cursorSeq;
+    });
+    if (endExclusive < 0) {
+      endExclusive = messages.length;
+    }
+  }
+
+  const start = Math.max(0, endExclusive - normalizedLimit);
+  const pagedMessages = messages.slice(start, endExclusive);
+  const firstSeq = resolveChatHistoryMessageSeq(pagedMessages[0]);
+  return {
+    messages: pagedMessages,
+    hasMore: start > 0,
+    ...(start > 0 && typeof firstSeq === "number" ? { nextBefore: String(firstSeq) } : {}),
+  };
+}
+
+function resolveVisibleChatHistoryPaging(params: {
+  pagedMessages: unknown[];
+  visibleMessages: unknown[];
+  hasMore: boolean;
+  nextBefore?: string;
+}): {
+  hasMore: boolean;
+  nextBefore?: string;
+} {
+  const originalFirstSeq = resolveChatHistoryMessageSeq(params.pagedMessages[0]);
+  const visibleFirstSeq = resolveChatHistoryMessageSeq(params.visibleMessages[0]);
+  const hiddenWithinPage =
+    typeof originalFirstSeq === "number" &&
+    typeof visibleFirstSeq === "number" &&
+    visibleFirstSeq > originalFirstSeq;
+
+  if (hiddenWithinPage) {
+    return {
+      hasMore: true,
+      nextBefore: String(visibleFirstSeq),
+    };
+  }
+
+  return {
+    hasMore: params.hasMore,
+    ...(params.nextBefore ? { nextBefore: params.nextBefore } : {}),
   };
 }
 
@@ -1164,11 +1255,19 @@ function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unk
     typeof (message as { timestamp?: unknown }).timestamp === "number"
       ? (message as { timestamp: number }).timestamp
       : Date.now();
+  const sourceMeta =
+    message && typeof message === "object" && (message as ChatHistoryMessage).__openclaw
+      ? { ...(message as ChatHistoryMessage).__openclaw }
+      : {};
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
-    __openclaw: { truncated: true, reason: "oversized" },
+    __openclaw: {
+      ...sourceMeta,
+      truncated: true,
+      reason: "oversized",
+    },
   };
 }
 
@@ -1279,6 +1378,140 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
   }
 }
 
+function readTranscriptMessageTimestampMs(message: unknown): number | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return timestamp;
+  }
+  if (typeof timestamp === "string" && timestamp.trim()) {
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function extractTranscriptMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as { content?: unknown; text?: unknown };
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  if (!Array.isArray(entry.content)) {
+    return undefined;
+  }
+  const parts = entry.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? text : undefined;
+    })
+    .filter((value): value is string => typeof value === "string");
+  return parts.length > 0 ? parts.join("") : undefined;
+}
+
+function extractAssistantAbortPersistenceText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as {
+    role?: unknown;
+    content?: unknown;
+    text?: unknown;
+    openclawAbort?: unknown;
+  };
+  if (entry.role !== "assistant" || entry.openclawAbort) {
+    return undefined;
+  }
+  const rawText = extractTranscriptMessageText(message);
+  if (!rawText) {
+    return undefined;
+  }
+  const stripped = stripInlineDirectiveTagsForDisplay(rawText).text;
+  return stripped.trim() ? stripped : undefined;
+}
+
+function normalizeAbortPartialComparisonText(text: string): string {
+  return stripInlineDirectiveTagsForDisplay(text).text.replace(/\s+/g, "");
+}
+
+function selectAbortRunTranscriptMessages(params: {
+  messages: unknown[];
+  runId: string;
+  startedAtMs?: number;
+}): unknown[] {
+  const runMarkerIndex = params.messages.findLastIndex((message) => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    const entry = message as { role?: unknown };
+    if (entry.role !== "user") {
+      return false;
+    }
+    const text = extractTranscriptMessageText(message);
+    return typeof text === "string" && text.includes(params.runId);
+  });
+  if (runMarkerIndex >= 0) {
+    return params.messages.slice(runMarkerIndex + 1);
+  }
+
+  if (typeof params.startedAtMs === "number" && Number.isFinite(params.startedAtMs)) {
+    const lowerBound = params.startedAtMs - 1_000;
+    return params.messages.filter((message) => {
+      const timestamp = readTranscriptMessageTimestampMs(message);
+      return typeof timestamp === "number" && timestamp >= lowerBound;
+    });
+  }
+
+  return params.messages;
+}
+
+function resolveUnpersistedAbortPartialText(params: {
+  snapshot: AbortedPartialSnapshot;
+  messages: unknown[];
+}): string | undefined {
+  const partialText = stripInlineDirectiveTagsForDisplay(params.snapshot.text).text;
+  if (!partialText.trim()) {
+    return undefined;
+  }
+
+  const currentRunMessages = selectAbortRunTranscriptMessages({
+    messages: params.messages,
+    runId: params.snapshot.runId,
+    startedAtMs: params.snapshot.startedAtMs,
+  });
+  const persistedText = currentRunMessages
+    .map((message) => extractAssistantAbortPersistenceText(message))
+    .filter((text): text is string => typeof text === "string" && text.length > 0)
+    .join("");
+
+  if (!persistedText.trim()) {
+    return partialText;
+  }
+
+  if (partialText.startsWith(persistedText)) {
+    const missingText = partialText.slice(persistedText.length);
+    return missingText.trim() ? missingText : undefined;
+  }
+
+  const normalizedPartial = normalizeAbortPartialComparisonText(partialText);
+  const normalizedPersisted = normalizeAbortPartialComparisonText(persistedText);
+  if (normalizedPartial && normalizedPartial === normalizedPersisted) {
+    return undefined;
+  }
+
+  return partialText;
+}
+
 function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
@@ -1352,6 +1585,7 @@ function collectSessionAbortPartials(params: {
       sessionId: active.sessionId,
       text,
       abortOrigin: params.abortOrigin,
+      startedAtMs: active.startedAtMs,
     });
   }
   return out;
@@ -1368,8 +1602,16 @@ function persistAbortedPartials(params: {
   const { storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
+    const existingMessages = readSessionMessages(sessionId, storePath, entry?.sessionFile);
+    const unpersistedText = resolveUnpersistedAbortPartialText({
+      snapshot,
+      messages: existingMessages,
+    });
+    if (!unpersistedText) {
+      continue;
+    }
     const appended = appendAssistantTranscriptMessage({
-      message: snapshot.text,
+      message: unpersistedText,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
@@ -1635,10 +1877,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, before } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      before?: string;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1656,8 +1899,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
+    const paged = paginateChatHistoryMessages({
+      messages: rawMessages,
+      limit: max,
+      before,
+    });
+    const sanitized = stripEnvelopeFromMessages(paged.messages);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
     );
@@ -1669,6 +1916,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    const paging = resolveVisibleChatHistoryPaging({
+      pagedMessages: normalized,
+      visibleMessages: bounded.messages,
+      hasMore: paged.hasMore,
+      nextBefore: paged.nextBefore,
+    });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -1691,6 +1944,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      hasMore: paging.hasMore,
+      nextBefore: paging.nextBefore,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
@@ -1767,6 +2022,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             sessionId: active.sessionId,
             text: partialText,
             abortOrigin: "rpc",
+            startedAtMs: active.startedAtMs,
           },
         ],
       });
@@ -1807,6 +2063,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      extensions?: {
+        computerUse?: unknown;
+      };
       idempotencyKey: string;
     };
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
@@ -1864,7 +2123,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    let { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const agentId = resolveSessionAgentId({
       sessionKey,
       config: cfg,
@@ -1879,6 +2138,57 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const now = Date.now();
     const clientRunId = p.idempotencyKey;
+    const normalizedComputerUse = normalizeComputerUseSessionConfig(
+      p.extensions && typeof p.extensions === "object" && !Array.isArray(p.extensions)
+        ? p.extensions.computerUse
+        : undefined,
+    );
+
+    if (normalizedComputerUse) {
+      const computerUseBinding = buildSessionClientCapabilityBindingFromClient({
+        client,
+        capability: "computer_use",
+      });
+      context.logGateway.info(
+        `computer_use chat.send extension session=${sessionKey} enabled=${normalizedComputerUse.enabled} binding=${computerUseBinding ? "yes" : "no"} client=${formatForLog(client?.connect?.client?.id ?? "n/a")}`,
+      );
+      const applied = await updateSessionStore(storePath, async (store) => {
+        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key: rawSessionKey,
+          store,
+        });
+        const result = await applySessionsPatchToStore({
+          cfg,
+          store,
+          storeKey: primaryKey,
+          patch: {
+            key: rawSessionKey,
+            computerUse: normalizedComputerUse,
+          },
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        });
+        if (result.ok) {
+          const nextEntry = applySessionClientCapabilityBinding({
+            entry: result.entry,
+            capability: "computer_use",
+            binding: computerUseBinding,
+            enabled: normalizedComputerUse.enabled,
+          });
+          result.entry = nextEntry;
+          store[primaryKey] = nextEntry;
+        }
+        return result;
+      });
+      if (!applied.ok) {
+        respond(false, undefined, applied.error);
+        return;
+      }
+      entry = applied.entry;
+      context.logGateway.info(
+        `computer_use chat.send applied session=${sessionKey} enabled=${entry.computerUse?.enabled === true} binding=${entry.clientCapabilityBindings?.computer_use ? "yes" : "no"}`,
+      );
+    }
 
     const sendPolicy = resolveSendPolicy({
       cfg,

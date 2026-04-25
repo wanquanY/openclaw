@@ -6,7 +6,8 @@
  *
  * Key behaviours:
  *  - Per-session `OpenAIWebSocketManager` (keyed by sessionId)
- *  - Tracks `previous_response_id` to send only incremental tool-result inputs
+ *  - Tracks `previous_response_id` to send incremental follow-up inputs
+ *    (tool results plus any computer_use observation continuation input)
  *  - Falls back to `streamSimple` (HTTP) if the WebSocket connection fails
  *  - Cleanup helpers for releasing sessions after the run completes
  *
@@ -280,7 +281,7 @@ async function runWarmUp(params: {
 /**
  * Creates a `StreamFn` backed by a persistent WebSocket connection to the
  * OpenAI Responses API.  The first call for a given `sessionId` opens the
- * connection; subsequent calls reuse it, sending only incremental tool-result
+ * connection; subsequent calls reuse it, sending only incremental follow-up
  * inputs with `previous_response_id`.
  *
  * If the WebSocket connection is unavailable, the function falls back to the
@@ -446,13 +447,13 @@ export function createOpenAIWebSocketStreamFn(
 
       if (turnInput.mode === "incremental_tool_results") {
         log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
+          `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} follow-up item(s)) previous_response_id=${turnInput.previousResponseId} computer_use_continuation=${turnInput.containsComputerUseObservationContinuation === true ? "yes" : "no"}`,
         );
       } else if (turnInput.mode === "full_context_restart") {
         // The WebSocket guide requires a fresh full-context turn here: when we
         // cannot continue the incremental chain, omit previous_response_id.
         log.debug(
-          `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
+          `[ws-stream] session=${sessionId}: no incremental follow-up found; sending full context without previous_response_id`,
         );
       } else {
         log.debug(

@@ -54,6 +54,7 @@ export type GatewaySessionRow = {
   traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  computerUse?: SessionEntry["computerUse"];
   sendPolicy?: "allow" | "deny";
   inputTokens?: number;
   outputTokens?: number;

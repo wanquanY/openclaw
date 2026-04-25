@@ -75,13 +75,46 @@ async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
 
 async function fetchHistoryMessages(
   ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+  params?: {
+    limit?: number;
+    before?: string;
+  },
 ): Promise<unknown[]> {
   const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
     sessionKey: "main",
-    limit: 1000,
+    limit: params?.limit ?? 1000,
+    ...(params?.before ? { before: params.before } : {}),
   });
   expect(historyRes.ok).toBe(true);
   return historyRes.payload?.messages ?? [];
+}
+
+async function fetchHistoryPage(
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+  params?: {
+    limit?: number;
+    before?: string;
+  },
+): Promise<{
+  messages: unknown[];
+  hasMore?: boolean;
+  nextBefore?: string;
+}> {
+  const historyRes = await rpcReq<{
+    messages?: unknown[];
+    hasMore?: boolean;
+    nextBefore?: string;
+  }>(ws, "chat.history", {
+    sessionKey: "main",
+    limit: params?.limit ?? 1000,
+    ...(params?.before ? { before: params.before } : {}),
+  });
+  expect(historyRes.ok).toBe(true);
+  return {
+    messages: historyRes.payload?.messages ?? [],
+    hasMore: historyRes.payload?.hasMore,
+    nextBefore: historyRes.payload?.nextBefore,
+  };
 }
 
 async function prepareMainHistoryHarness(params: {
@@ -235,6 +268,79 @@ describe("gateway server chat", () => {
       >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+    });
+  });
+
+  test("chat.history paginates older transcript pages over RPC", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+      });
+
+      const historyLines = Array.from({ length: 5 }, (_unused, index) =>
+        JSON.stringify({
+          message: {
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: [{ type: "text", text: `message-${index + 1}` }],
+            timestamp: Date.now() + index,
+          },
+        }),
+      );
+      await writeMainSessionTranscript(sessionDir, historyLines);
+
+      const firstPage = await fetchHistoryPage(ws, { limit: 2 });
+      const firstTexts = firstPage.messages.map((message) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          typeof (message as { content?: unknown }).content !== "undefined"
+        ) {
+          return JSON.stringify((message as { content?: unknown }).content);
+        }
+        return JSON.stringify(message);
+      });
+      expect(firstTexts.join("\n")).toContain("message-4");
+      expect(firstTexts.join("\n")).toContain("message-5");
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.nextBefore).toBeTruthy();
+
+      const secondPage = await fetchHistoryPage(ws, {
+        limit: 2,
+        before: firstPage.nextBefore,
+      });
+      const secondTexts = secondPage.messages.map((message) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          typeof (message as { content?: unknown }).content !== "undefined"
+        ) {
+          return JSON.stringify((message as { content?: unknown }).content);
+        }
+        return JSON.stringify(message);
+      });
+      expect(secondTexts.join("\n")).toContain("message-2");
+      expect(secondTexts.join("\n")).toContain("message-3");
+      expect(secondPage.hasMore).toBe(true);
+      expect(secondPage.nextBefore).toBeTruthy();
+
+      const thirdPage = await fetchHistoryPage(ws, {
+        limit: 2,
+        before: secondPage.nextBefore,
+      });
+      const thirdTexts = thirdPage.messages.map((message) => {
+        if (
+          message &&
+          typeof message === "object" &&
+          typeof (message as { content?: unknown }).content !== "undefined"
+        ) {
+          return JSON.stringify((message as { content?: unknown }).content);
+        }
+        return JSON.stringify(message);
+      });
+      expect(thirdTexts.join("\n")).toContain("message-1");
+      expect(thirdPage.hasMore).toBe(false);
+      expect(thirdPage.nextBefore).toBeUndefined();
     });
   });
 

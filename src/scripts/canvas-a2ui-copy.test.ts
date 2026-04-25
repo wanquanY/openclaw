@@ -66,4 +66,26 @@ describe("canvas a2ui copy", () => {
       await expect(fs.stat(path.join(outDir, "a2ui.bundle.js"))).resolves.toBeTruthy();
     });
   });
+
+  it("replaces an existing dist directory without failing", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(dir, "dist");
+      await fs.mkdir(srcDir, { recursive: true });
+      await fs.mkdir(outDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html>fresh</html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log('fresh');", "utf8");
+      await fs.writeFile(path.join(outDir, "stale.txt"), "stale", "utf8");
+
+      await copyA2uiAssets({ srcDir, outDir });
+
+      await expect(fs.readFile(path.join(outDir, "index.html"), "utf8")).resolves.toContain(
+        "fresh",
+      );
+      await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toContain(
+        "fresh",
+      );
+      await expect(fs.stat(path.join(outDir, "stale.txt"))).rejects.toThrow();
+    });
+  });
 });

@@ -39,7 +39,6 @@ import {
   resolveBootstrapProfileScopesForRole,
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
-import { safeJsonStringify } from "../../../utils/safe-json.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -47,6 +46,7 @@ import {
   isOperatorUiClient,
   isWebchatClient,
 } from "../../../utils/message-channel.js";
+import { safeJsonStringify } from "../../../utils/safe-json.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
@@ -1314,6 +1314,15 @@ export function attachGatewayWsMessageHandler(params: {
                 `voicewake snapshot failed for ${nodeSession.nodeId}: ${formatForLog(err)}`,
               ),
             );
+        } else if (
+          role === "operator" &&
+          ((Array.isArray(connectParams.commands) && connectParams.commands.length > 0) ||
+            (connectParams.permissions &&
+              typeof connectParams.permissions === "object" &&
+              Object.keys(connectParams.permissions).length > 0))
+        ) {
+          const context = buildRequestContext();
+          context.clientHostRegistry.register(nextClient);
         }
 
         try {

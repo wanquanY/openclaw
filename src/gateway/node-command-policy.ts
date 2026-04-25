@@ -23,6 +23,15 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
+const COMPUTER_USE_READ_COMMANDS = [
+  "computer.status",
+  "computer.displays",
+  "computer.windows",
+  "computer.capture",
+  "computer.ax",
+];
+const COMPUTER_USE_ACTION_COMMANDS = ["computer.action"];
+
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
 const ANDROID_NOTIFICATION_COMMANDS = [...NOTIFICATION_COMMANDS, "notifications.actions"];
@@ -103,6 +112,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   macos: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
+    ...COMPUTER_USE_READ_COMMANDS,
+    ...COMPUTER_USE_ACTION_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
@@ -112,8 +123,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS],
-  windows: [...SYSTEM_COMMANDS],
+  linux: [...COMPUTER_USE_READ_COMMANDS, ...COMPUTER_USE_ACTION_COMMANDS, ...SYSTEM_COMMANDS],
+  windows: [...COMPUTER_USE_READ_COMMANDS, ...COMPUTER_USE_ACTION_COMMANDS, ...SYSTEM_COMMANDS],
   // Fail-safe: unknown metadata should not receive host exec defaults.
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };

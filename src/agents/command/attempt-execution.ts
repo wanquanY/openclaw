@@ -279,6 +279,7 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
+    computerUse: params.sessionEntry?.computerUse,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,

@@ -9,6 +9,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
+import type { SkillConfig } from "./types.skills.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip";
@@ -181,6 +182,11 @@ export type AgentDefaultsConfig = {
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
   skills?: string[];
+  /**
+   * Optional default skill settings layered on top of global skills.entries for
+   * agents that do not provide their own overrides.
+   */
+  skillSettings?: Record<string, SkillConfig>;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */

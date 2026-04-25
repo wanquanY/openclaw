@@ -55,6 +55,30 @@ const forwardingCases = [
     params: { internalEvents },
     expected: { internalEvents },
   },
+  {
+    name: "forwards computerUse so embedded attempts can expose the desktop tool",
+    runId: "forward-computerUse",
+    params: {
+      computerUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        scope: { type: "full_desktop" },
+        hostPolicy: "local_only",
+        modelPolicy: { mode: "follow_user_model" },
+        approvals: { highRiskActionsRequireConfirm: true },
+      },
+    },
+    expected: {
+      computerUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        scope: { type: "full_desktop" },
+        hostPolicy: "local_only",
+        modelPolicy: { mode: "follow_user_model" },
+        approvals: { highRiskActionsRequireConfirm: true },
+      },
+    },
+  },
 ] satisfies ForwardingCase[];
 
 describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", () => {

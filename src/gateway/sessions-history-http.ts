@@ -10,6 +10,7 @@ import {
 } from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { isLocalDirectRequest } from "./auth.js";
 import {
   sendInvalidRequest,
   sendJson,
@@ -19,9 +20,11 @@ import {
 import {
   authorizeGatewayHttpRequestOrReply,
   getHeader,
-  resolveTrustedHttpOperatorScopes,
+  resolveHttpBrowserOriginPolicy,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./server-methods/chat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
 import {
@@ -85,6 +88,39 @@ function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
+function appendVaryHeader(res: ServerResponse, value: string): void {
+  const current = res.getHeader("Vary");
+  const values = new Set(
+    String(Array.isArray(current) ? current.join(",") : (current ?? ""))
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  values.add(value);
+  res.setHeader("Vary", [...values].join(", "));
+}
+
+function resolveCorsRequestHeaders(req: IncomingMessage): string {
+  const requested = normalizeOptionalString(getHeader(req, "access-control-request-headers"));
+  if (requested) {
+    return requested;
+  }
+  return "Authorization, X-OpenClaw-Scopes, X-Client-Transport-Actual, Accept, Content-Type";
+}
+
+function applySessionHistoryCorsHeaders(req: IncomingMessage, res: ServerResponse): void {
+  const origin = normalizeOptionalString(getHeader(req, "origin"));
+  if (!origin) {
+    return;
+  }
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", resolveCorsRequestHeaders(req));
+  res.setHeader("Access-Control-Max-Age", "600");
+  appendVaryHeader(res, "Origin");
+  appendVaryHeader(res, "Access-Control-Request-Headers");
+}
+
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -101,6 +137,32 @@ export async function handleSessionHistoryHttpRequest(
   }
   if (!sessionKey) {
     sendInvalidRequest(res, "invalid session key");
+    return true;
+  }
+
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(req, loadConfig());
+  const requestOrigin = normalizeOptionalString(browserOriginPolicy.origin);
+  if (requestOrigin) {
+    const originCheck = checkBrowserOrigin({
+      ...browserOriginPolicy,
+      isLocalClient: isLocalDirectRequest(req, opts.trustedProxies, opts.allowRealIpFallback),
+    });
+    if (!originCheck.ok) {
+      sendJson(res, 403, {
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: originCheck.reason,
+        },
+      });
+      return true;
+    }
+    applySessionHistoryCorsHeaders(req, res);
+  }
+
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
     return true;
   }
   if (req.method !== "GET") {
@@ -123,7 +185,7 @@ export async function handleSessionHistoryHttpRequest(
 
   // HTTP callers must declare the same least-privilege operator scopes they
   // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
+  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
   if (!scopeAuth.allowed) {
     sendJson(res, 403, {

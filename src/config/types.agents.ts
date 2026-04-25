@@ -7,6 +7,7 @@ import type {
 } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
+import type { SkillConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentRuntimeAcpConfig = {
@@ -83,6 +84,12 @@ export type AgentConfig = {
   fastModeDefault?: boolean;
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
+  /**
+   * Optional per-agent skill settings layered on top of global skills.entries.
+   * This is workspace-scoped in practice because desktop-managed agents own
+   * independent workspaces.
+   */
+  skillSettings?: Record<string, SkillConfig>;
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;

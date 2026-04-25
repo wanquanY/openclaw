@@ -93,8 +93,11 @@ function filterSkillEntries(
   config?: OpenClawConfig,
   skillFilter?: string[],
   eligibility?: SkillEligibilityContext,
+  agentId?: string,
 ): SkillEntry[] {
-  let filtered = entries.filter((entry) => shouldIncludeSkill({ entry, config, eligibility }));
+  let filtered = entries.filter((entry) =>
+    shouldIncludeSkill({ entry, config, eligibility, agentId }),
+  );
   // If skillFilter is provided, only include skills in the filter list.
   if (skillFilter !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
@@ -740,6 +743,7 @@ function resolveWorkspaceSkillPromptState(
     opts?.config,
     effectiveSkillFilter,
     opts?.eligibility,
+    opts?.agentId,
   );
   const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
@@ -806,7 +810,13 @@ export function loadWorkspaceSkillEntries(
   if (effectiveSkillFilter === undefined) {
     return entries;
   }
-  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+  return filterSkillEntries(
+    entries,
+    opts?.config,
+    effectiveSkillFilter,
+    opts?.eligibility,
+    opts?.agentId,
+  );
 }
 
 export function loadVisibleWorkspaceSkillEntries(
@@ -822,7 +832,13 @@ export function loadVisibleWorkspaceSkillEntries(
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
-  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+  return filterSkillEntries(
+    entries,
+    opts?.config,
+    effectiveSkillFilter,
+    opts?.eligibility,
+    opts?.agentId,
+  );
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {

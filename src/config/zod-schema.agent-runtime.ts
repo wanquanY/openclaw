@@ -771,6 +771,15 @@ export const MemorySearchSchema = z
   .optional();
 export { AgentModelSchema };
 
+export const AgentSkillSettingsEntrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    env: z.record(z.string(), z.string()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
 const AgentRuntimeAcpSchema = z
   .object({
     agent: z.string().optional(),
@@ -821,6 +830,7 @@ export const AgentEntrySchema = z
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    skillSettings: z.record(z.string(), AgentSkillSettingsEntrySchema).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,

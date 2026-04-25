@@ -1,5 +1,8 @@
+import type { ComputerUseSessionConfig } from "../computer-use/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { logVerbose } from "../globals.js";
+import { defaultRuntime } from "../runtime.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -16,6 +19,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createComputerUseTool } from "./tools/computer-use-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
@@ -83,6 +87,7 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
+    computerUse?: ComputerUseSessionConfig;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -227,8 +232,24 @@ export function createOpenClawTools(
     sandboxRoot: options?.sandboxRoot,
     workspaceDir,
   });
+  logVerbose(
+    `computer_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+  );
+  defaultRuntime.log?.(
+    `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+  );
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
+    ...(options?.computerUse?.enabled
+      ? [
+          createComputerUseTool({
+            sessionConfig: options.computerUse,
+            sessionKey: options?.agentSessionKey,
+            agentId: sessionAgentId,
+            config: options?.config,
+          }),
+        ]
+      : []),
     nodesTool,
     createCronTool({
       agentSessionKey: options?.agentSessionKey,

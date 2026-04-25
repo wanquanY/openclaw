@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
+import { detectManagedWorkspaceSkillLifecycleSync } from "./skills-manage.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
@@ -41,6 +42,8 @@ export type SkillStatusEntry = {
   homepage?: string;
   always: boolean;
   disabled: boolean;
+  managedInstall: boolean;
+  installOrigin?: "clawhub" | "file" | "remote-npm";
   blockedByAllowlist: boolean;
   eligible: boolean;
   requirements: Requirements;
@@ -173,13 +176,15 @@ function buildSkillStatus(
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
   bundledNames?: Set<string>,
+  agentId?: string,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
-  const skillConfig = resolveSkillConfig(config, skillKey);
+  const skillConfig = resolveSkillConfig(config, skillKey, { agentId });
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;
+  const managedLifecycle = detectManagedWorkspaceSkillLifecycleSync(entry.skill.baseDir);
   const isEnvSatisfied = (envName: string) =>
     Boolean(
       process.env[envName] ||
@@ -216,6 +221,8 @@ function buildSkillStatus(
     homepage,
     always,
     disabled,
+    managedInstall: managedLifecycle !== null,
+    installOrigin: managedLifecycle?.source,
     blockedByAllowlist,
     eligible,
     requirements: required,
@@ -232,6 +239,7 @@ export function buildWorkspaceSkillStatus(
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;
+    agentId?: string;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
@@ -242,13 +250,21 @@ export function buildWorkspaceSkillStatus(
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
+      agentId: opts?.agentId,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
+      buildSkillStatus(
+        entry,
+        opts?.config,
+        prefs,
+        opts?.eligibility,
+        bundledContext.names,
+        opts?.agentId,
+      ),
     ),
   };
 }

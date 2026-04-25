@@ -10,6 +10,7 @@
 
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markComputerUseObservationContinuationMessage } from "../computer-use/observation-continuation.js";
 import type { ResponseObject } from "./openai-ws-connection.js";
 import {
   __testing as openAIWsStreamTesting,
@@ -259,6 +260,24 @@ function toolResultMsg(callId: string, output: string): FakeMessage {
     isError: false,
     timestamp: 0,
   };
+}
+
+function computerUseObservationMsg(imageData = "latest-screen"): FakeMessage {
+  return markComputerUseObservationContinuationMessage({
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text: "Computer Use observation for the next action. Treat the attached image as the latest desktop state.\nObservation target: target=window | app=WeChat | window=WeChat | display=1",
+      },
+      {
+        type: "image",
+        data: imageData,
+        mimeType: "image/png",
+      },
+    ],
+    timestamp: 0,
+  }) as FakeMessage;
 }
 
 function makeFakeAssistantMessage(text: string) {
@@ -904,6 +923,7 @@ describe("buildAssistantMessageFromResponse", () => {
 
 describe("planTurnInput", () => {
   const replayModel = { input: ["text"] };
+  const visionReplayModel = { input: ["text", "image"] };
 
   it("uses incremental tool result replay when a previous response id and new tool results exist", () => {
     const context = {
@@ -1010,6 +1030,56 @@ describe("planTurnInput", () => {
     expect(turnInput).toMatchObject({
       mode: "full_context_initial",
       inputItems: [{ type: "message", role: "user", content: "Hello!" }],
+    });
+  });
+
+  it("keeps synthetic computer_use observation input alongside incremental tool results", () => {
+    const context = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Observe WeChat"),
+        assistantMsg(
+          [],
+          [{ id: "call_1|fc_1", name: "computer_use", args: { action: "observe" } }],
+        ),
+        toolResultMsg("call_1|fc_1", "Completed screen observation"),
+        computerUseObservationMsg("wechat-frame"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const turnInput = planTurnInput({
+      context,
+      model: visionReplayModel,
+      previousResponseId: "resp_prev",
+      lastContextLength: 2,
+    });
+
+    expect(turnInput.mode).toBe("incremental_tool_results");
+    expect(turnInput.containsComputerUseObservationContinuation).toBe(true);
+    expect(turnInput.inputItems).toHaveLength(2);
+    expect(turnInput.inputItems[0]).toEqual({
+      type: "function_call_output",
+      call_id: "call_1",
+      output: "Completed screen observation",
+    });
+    expect(turnInput.inputItems[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [
+        expect.objectContaining({
+          type: "input_text",
+          text: expect.stringContaining("Computer Use observation for the next action."),
+        }),
+        expect.objectContaining({
+          type: "input_image",
+          source: expect.objectContaining({
+            type: "base64",
+            media_type: "image/png",
+            data: "wechat-frame",
+          }),
+        }),
+      ],
     });
   });
 });
@@ -1419,6 +1489,94 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const inputTypes = (sent2.input ?? []).map((i) => i.type);
     expect(inputTypes.every((t) => t === "function_call_output")).toBe(true);
     expect(inputTypes).toHaveLength(1);
+  });
+
+  it("includes computer_use observation continuation input in incremental websocket replay", async () => {
+    const sessionId = "sess-incremental-computer-use";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+    const visionModel = {
+      ...modelStub,
+      input: ["text", "image"],
+    };
+
+    const ctx1 = {
+      systemPrompt: "You are helpful.",
+      messages: [userMsg("Observe WeChat")] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream1 = streamFn(
+      visionModel as Parameters<typeof streamFn>[0],
+      ctx1 as Parameters<typeof streamFn>[1],
+    );
+
+    const done1 = (async () => {
+      for await (const _ev of await resolveStream(stream1)) {
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.setPreviousResponseId("resp_turn1_obs");
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn1_obs", undefined, "computer_use"),
+    });
+    await done1;
+
+    const ctx2 = {
+      systemPrompt: "You are helpful.",
+      messages: [
+        userMsg("Observe WeChat"),
+        assistantMsg([], [{ id: "call_1", name: "computer_use", args: { action: "observe" } }]),
+        toolResultMsg("call_1", "Completed screen observation"),
+        computerUseObservationMsg("wechat-frame"),
+      ] as Parameters<typeof convertMessagesToInputItems>[0],
+      tools: [],
+    };
+
+    const stream2 = streamFn(
+      visionModel as Parameters<typeof streamFn>[0],
+      ctx2 as Parameters<typeof streamFn>[1],
+    );
+
+    const done2 = (async () => {
+      for await (const _ev of await resolveStream(stream2)) {
+      }
+    })();
+
+    await new Promise((r) => setImmediate(r));
+    manager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp_turn2_obs", "Observation received."),
+    });
+    await done2;
+
+    expect(manager.sentEvents).toHaveLength(2);
+    const sent2 = manager.sentEvents[1] as {
+      previous_response_id?: string;
+      input: Array<{ type: string; role?: string; content?: unknown }>;
+    };
+    expect(sent2.previous_response_id).toBe("resp_turn1_obs");
+    expect(sent2.input.map((item) => item.type)).toEqual(["function_call_output", "message"]);
+    expect(sent2.input[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      content: [
+        expect.objectContaining({
+          type: "input_text",
+          text: expect.stringContaining("Computer Use observation for the next action."),
+        }),
+        expect.objectContaining({
+          type: "input_image",
+          source: expect.objectContaining({
+            type: "base64",
+            media_type: "image/png",
+            data: "wechat-frame",
+          }),
+        }),
+      ],
+    });
   });
 
   it("omits previous_response_id when replaying full context on follow-up turns", async () => {
