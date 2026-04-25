@@ -319,6 +319,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       const context = buildRequestContext();
       context.unsubscribeAllSessionEvents(connId);
+      context.clientHostRegistry.unregister(connId);
       if (client?.connect?.role === "node") {
         const nodeId = context.nodeRegistry.unregister(connId);
         if (nodeId) {

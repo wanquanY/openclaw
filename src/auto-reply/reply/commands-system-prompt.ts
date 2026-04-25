@@ -87,6 +87,7 @@ export async function resolveCommandsSystemPromptBundle(
         senderIsOwner: params.command.senderIsOwner,
         modelProvider: params.provider,
         modelId: params.model,
+        computerUse: targetSessionEntry?.computerUse,
       });
     } catch {
       return [];

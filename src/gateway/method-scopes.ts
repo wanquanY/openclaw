@@ -118,6 +118,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.get",
   ],
   [WRITE_SCOPE]: [
+    "client.invoke",
+    "client.invoke.result",
     "message.action",
     "send",
     "poll",

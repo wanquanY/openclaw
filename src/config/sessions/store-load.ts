@@ -8,7 +8,11 @@ import {
   writeSessionStoreCache,
 } from "./store-cache.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
-import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
+import {
+  normalizeSessionClientCapabilityBindings,
+  normalizeSessionRuntimeModelFields,
+  type SessionEntry,
+} from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
@@ -56,7 +60,9 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): void
     if (!entry) {
       continue;
     }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
+    const normalized = normalizeSessionEntryDelivery(
+      normalizeSessionClientCapabilityBindings(normalizeSessionRuntimeModelFields(entry)),
+    );
     if (normalized !== entry) {
       store[key] = normalized;
     }

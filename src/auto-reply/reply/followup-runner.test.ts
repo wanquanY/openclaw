@@ -956,6 +956,49 @@ describe("createFollowupRunner compaction", () => {
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {
+  it("passes queued computer_use config to embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          computerUse: {
+            enabled: true,
+            mode: "plan_and_act",
+            scope: { type: "full_desktop" },
+            hostPolicy: "local_only",
+            modelPolicy: { mode: "follow_user_model" },
+            approvals: { highRiskActionsRequireConfirm: true },
+          },
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          computerUse?: unknown;
+        }
+      | undefined;
+    expect(call?.computerUse).toEqual({
+      enabled: true,
+      mode: "plan_and_act",
+      scope: { type: "full_desktop" },
+      hostPolicy: "local_only",
+      modelPolicy: { mode: "follow_user_model" },
+      approvals: { highRiskActionsRequireConfirm: true },
+    });
+  });
+
   it("passes stored warning signature history to embedded followup runs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],

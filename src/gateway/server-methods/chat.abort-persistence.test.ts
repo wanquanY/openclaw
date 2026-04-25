@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
@@ -13,10 +13,27 @@ type TranscriptLine = {
   message?: Record<string, unknown>;
 };
 
+type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
   sessionId: "",
 }));
+
+const zeroUsage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+};
 
 vi.mock("../session-utils.js", async () => {
   const original =
@@ -60,6 +77,31 @@ async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLi
         return {};
       }
     });
+}
+
+function appendTranscriptMessage(transcriptPath: string, message: AppendMessageArg) {
+  const session = SessionManager.open(transcriptPath);
+  session.appendMessage(message);
+}
+
+function extractPersistedText(message: Record<string, unknown> | undefined): string | undefined {
+  const content = message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const parts = content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return undefined;
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? text : undefined;
+    })
+    .filter((text): text is string => typeof text === "string");
+  return parts.length > 0 ? parts.join("") : undefined;
 }
 
 function setMockSessionEntry(transcriptPath: string, sessionId: string) {
@@ -192,6 +234,128 @@ describe("chat abort transcript persistence", () => {
       },
     });
     expect(runBPersisted).toBeUndefined();
+  });
+
+  it("does not persist an abort aggregate when current-run assistant segments already cover it", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-dedupe-",
+    );
+    const runId = "idem-abort-dedupe-run";
+    appendTranscriptMessage(transcriptPath, {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Conversation info:\n${runId}\n\nsend a message`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    appendTranscriptMessage(transcriptPath, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "我直接用电脑界面操作飞书发出去。" },
+        { type: "toolCall", id: "call_1", name: "computer_use", arguments: { action: "observe" } },
+      ],
+      api: "openai-completions",
+      provider: "video-workflow",
+      model: "gpt-5.4",
+      usage: zeroUsage,
+      timestamp: Date.now() + 1,
+      stopReason: "toolUse",
+    });
+    appendTranscriptMessage(transcriptPath, {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "computer_use",
+      content: [{ type: "text", text: "ok" }],
+      isError: false,
+      timestamp: Date.now() + 2,
+    });
+    appendTranscriptMessage(transcriptPath, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "我先在飞书里搜索“杨万权”，切到正确会话后发送。" },
+        { type: "toolCall", id: "call_2", name: "computer_use", arguments: { action: "click" } },
+      ],
+      api: "openai-completions",
+      provider: "video-workflow",
+      model: "gpt-5.4",
+      usage: zeroUsage,
+      timestamp: Date.now() + 3,
+      stopReason: "toolUse",
+    });
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([
+        [runId, "我直接用电脑界面操作飞书发出去。我先在飞书里搜索“杨万权”，切到正确会话后发送。"],
+      ]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+    expect(persisted).toBeUndefined();
+  });
+
+  it("persists only the missing abort suffix when current-run transcript covers a prefix", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-suffix-",
+    );
+    const runId = "idem-abort-suffix-run";
+    appendTranscriptMessage(transcriptPath, {
+      role: "user",
+      content: `Conversation info: ${runId}`,
+      timestamp: Date.now(),
+    });
+    appendTranscriptMessage(transcriptPath, {
+      role: "assistant",
+      content: [{ type: "text", text: "已写入的前半段。" }],
+      api: "openai-completions",
+      provider: "video-workflow",
+      model: "gpt-5.4",
+      usage: zeroUsage,
+      timestamp: Date.now() + 1,
+      stopReason: "toolUse",
+    });
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([[runId, "已写入的前半段。还没有落盘的尾巴。"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+    expect(extractPersistedText(persisted)).toBe("还没有落盘的尾巴。");
+    expect(persisted).toMatchObject({
+      openclawAbort: {
+        aborted: true,
+        origin: "rpc",
+        runId,
+      },
+    });
   });
 
   it("persists /stop partials with stop-command metadata", async () => {

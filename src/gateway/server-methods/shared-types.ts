@@ -7,6 +7,7 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { ClientHostRegistry } from "../client-host-registry.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
@@ -60,6 +61,7 @@ export type GatewayRequestContext = {
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
+  clientHostRegistry: ClientHostRegistry;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;

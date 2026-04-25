@@ -1,5 +1,6 @@
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
+import type { ComputerUseSessionConfig } from "../../../computer-use/types.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -71,6 +72,7 @@ export type FollowupRun = {
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+    computerUse?: ComputerUseSessionConfig;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;

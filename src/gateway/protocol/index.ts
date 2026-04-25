@@ -132,6 +132,10 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type PluginApprovalRequestParams,
+  PluginApprovalRequestParamsSchema,
+  type PluginApprovalResolveParams,
+  PluginApprovalResolveParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -150,6 +154,10 @@ import {
   MessageActionParamsSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
+  type ClientInvokeParams,
+  ClientInvokeParamsSchema,
+  type ClientInvokeResultParams,
+  ClientInvokeResultParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
   type NodeEventParams,
@@ -378,6 +386,10 @@ export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
 export const validateNodeDescribeParams = ajv.compile<NodeDescribeParams>(NodeDescribeParamsSchema);
+export const validateClientInvokeParams = ajv.compile<ClientInvokeParams>(ClientInvokeParamsSchema);
+export const validateClientInvokeResultParams = ajv.compile<ClientInvokeResultParams>(
+  ClientInvokeResultParamsSchema,
+);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams>(
   NodeInvokeResultParamsSchema,
@@ -536,6 +548,12 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
+export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalRequestParams>(
+  PluginApprovalRequestParamsSchema,
+);
+export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
+  PluginApprovalResolveParamsSchema,
+);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -610,6 +628,8 @@ export {
   WakeParamsSchema,
   PushTestParamsSchema,
   PushTestResultSchema,
+  ClientInvokeParamsSchema,
+  ClientInvokeResultParamsSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -808,6 +828,8 @@ export type {
   SkillsInstallParams,
   SkillsUninstallParams,
   SkillsUpdateParams,
+  ClientInvokeParams,
+  ClientInvokeResultParams,
   NodePairRejectParams,
   NodePairVerifyParams,
   NodeListParams,

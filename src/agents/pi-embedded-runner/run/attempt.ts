@@ -29,6 +29,7 @@ import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-m
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -98,6 +99,7 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
+import { installComputerUseObservationContext } from "../computer-use-observation-context.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
@@ -535,6 +537,7 @@ export async function runEmbeddedAttempt(
           modelCompat: params.model.compat,
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
+          computerUse: params.computerUse,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
@@ -552,11 +555,17 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+    defaultRuntime.log?.(
+      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
+    );
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
     });
+    defaultRuntime.log?.(
+      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
+    );
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
@@ -773,6 +782,7 @@ export async function runEmbeddedAttempt(
 
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let removeComputerUseObservationContext: (() => void) | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     try {
       await repairSessionFileIfNeeded({
@@ -921,6 +931,16 @@ export async function runEmbeddedAttempt(
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      if (modelHasVision) {
+        removeComputerUseObservationContext = installComputerUseObservationContext({
+          agent: activeSession.agent,
+          onInjected: ({ totalMessages }) => {
+            defaultRuntime.log?.(
+              `[computer_use_trace] stage=embedded_attempt_observation_context session=${params.sessionKey ?? params.sessionId} totalMessages=${totalMessages}`,
+            );
+          },
+        });
+      }
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1913,6 +1933,7 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       removeToolResultContextGuard?.();
+      removeComputerUseObservationContext?.();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,

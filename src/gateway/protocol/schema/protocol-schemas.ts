@@ -64,6 +64,11 @@ import {
   WebLoginWaitParamsSchema,
 } from "./channels.js";
 import {
+  ClientInvokeParamsSchema,
+  ClientInvokeRequestEventSchema,
+  ClientInvokeResultParamsSchema,
+} from "./client-host.js";
+import {
   CommandEntrySchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
@@ -227,6 +232,9 @@ export const ProtocolSchemas = {
   AgentIdentityResult: AgentIdentityResultSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
+  ClientInvokeParams: ClientInvokeParamsSchema,
+  ClientInvokeResultParams: ClientInvokeResultParamsSchema,
+  ClientInvokeRequestEvent: ClientInvokeRequestEventSchema,
   NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,

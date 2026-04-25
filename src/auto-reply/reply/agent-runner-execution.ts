@@ -599,6 +599,9 @@ export async function runAgentTurnWithFallback(params: {
           ...params.followupRun.run,
           config: runtimeConfig,
         };
+  defaultRuntime.log?.(
+    `[computer_use_trace] stage=agent_runner_execution session=${effectiveRun.sessionKey ?? effectiveRun.sessionId} enabled=${effectiveRun.computerUse?.enabled === true} scope=${effectiveRun.computerUse?.scope?.type ?? "n/a"} modelPolicy=${effectiveRun.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+  );
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({

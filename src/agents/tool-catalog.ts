@@ -198,6 +198,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "computer_use",
+    label: "computer_use",
+    description: "Control a paired desktop computer via screenshots and atomic actions",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "browser",
     label: "browser",
     description: "Control web browser",

@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -607,6 +608,13 @@ export async function runPreparedReply(
     ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
+  const preparedComputerUse = preparedSessionState.sessionEntry?.computerUse;
+  logVerbose(
+    `computer_use run session=${sessionKey ?? preparedSessionState.sessionId} enabled=${preparedComputerUse?.enabled === true} scope=${preparedComputerUse?.scope?.type ?? "n/a"} modelPolicy=${preparedComputerUse?.modelPolicy?.mode ?? "n/a"} approvals=${preparedComputerUse?.approvals?.highRiskActionsRequireConfirm === true ? "confirm" : "full"}`,
+  );
+  defaultRuntime.log?.(
+    `[computer_use_trace] stage=get_reply_run session=${sessionKey ?? preparedSessionState.sessionId} enabled=${preparedComputerUse?.enabled === true} scope=${preparedComputerUse?.scope?.type ?? "n/a"} modelPolicy=${preparedComputerUse?.modelPolicy?.mode ?? "n/a"} approvals=${preparedComputerUse?.approvals?.highRiskActionsRequireConfirm === true ? "confirm" : "full"}`,
+  );
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -666,6 +674,7 @@ export async function runPreparedReply(
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
+      computerUse: preparedComputerUse,
       bashElevated: {
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,

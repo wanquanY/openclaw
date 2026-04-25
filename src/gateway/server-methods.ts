@@ -8,6 +8,7 @@ import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { channelsHandlers } from "./server-methods/channels.js";
 import { chatHandlers } from "./server-methods/chat.js";
+import { clientHostHandlers } from "./server-methods/client-host.js";
 import { commandsHandlers } from "./server-methods/commands.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
@@ -89,6 +90,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...toolsEffectiveHandlers,
   ...ttsHandlers,
   ...skillsHandlers,
+  ...clientHostHandlers,
   ...sessionsHandlers,
   ...systemHandlers,
   ...updateHandlers,

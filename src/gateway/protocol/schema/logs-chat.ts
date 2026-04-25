@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { ComputerUseSessionConfigSchema } from "../../../computer-use/schema.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
 export const LogsTailParamsSchema = Type.Object(
@@ -47,6 +48,14 @@ export const ChatSendParamsSchema = Type.Object(
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
+    extensions: Type.Optional(
+      Type.Object(
+        {
+          computerUse: Type.Optional(ComputerUseSessionConfigSchema),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

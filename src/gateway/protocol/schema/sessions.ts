@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { ComputerUseSessionConfigSchema } from "../../../computer-use/schema.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const SessionCompactionCheckpointReasonSchema = Type.Union([
@@ -181,6 +182,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    computerUse: Type.Optional(Type.Union([ComputerUseSessionConfigSchema, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

@@ -317,6 +317,7 @@ function createChatContext(): Pick<
       ],
     registerToolEventRecipient: vi.fn(),
     logGateway: {
+      info: vi.fn(),
       warn: vi.fn(),
       debug: vi.fn(),
     } as unknown as GatewayRequestContext["logGateway"],
@@ -417,6 +418,72 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.saveMediaWait = null;
     mockState.activeSaveMediaCalls = 0;
     mockState.maxActiveSaveMediaCalls = 0;
+  });
+
+  it("persists chat.send computer_use session config and binds the local client capability", async () => {
+    createTranscriptFixture("openclaw-chat-send-computer-use-");
+    const context = createChatContext();
+    const respond = vi.fn();
+    const client = {
+      connect: {
+        device: {
+          id: "device-cu-1",
+        },
+        caps: ["computer_use"],
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.UI,
+          displayName: "OpenClaw Control UI",
+          version: "1.0.0",
+        },
+      },
+    };
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "computer-use-send-1",
+      client,
+      requestParams: {
+        extensions: {
+          computerUse: {
+            enabled: true,
+            mode: "plan_and_act",
+            scope: {
+              type: "full_desktop",
+            },
+            hostPolicy: "local_only",
+            modelPolicy: {
+              mode: "follow_user_model",
+            },
+            approvals: {
+              highRiskActionsRequireConfirm: true,
+            },
+          },
+        },
+      },
+    });
+
+    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
+    const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, unknown>;
+    const entry = Object.values(store)[0] as
+      | {
+          computerUse?: { enabled?: boolean; scope?: { type?: string } };
+          clientCapabilityBindings?: Record<string, { deviceId?: string; clientId?: string }>;
+        }
+      | undefined;
+
+    expect(entry).toBeTruthy();
+    expect(entry?.computerUse).toMatchObject({
+      enabled: true,
+      scope: {
+        type: "full_desktop",
+      },
+    });
+    expect(entry?.clientCapabilityBindings?.computer_use).toMatchObject({
+      deviceId: "device-cu-1",
+      clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+    });
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
