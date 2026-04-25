@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { ComputerUseSessionConfig } from "../../computer-use/types.js";
 import {
   COMPUTER_USE_ACTIONS,

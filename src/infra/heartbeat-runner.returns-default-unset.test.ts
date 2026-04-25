@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isWhatsAppGroupJid,
-  normalizeWhatsAppTarget,
-} from "../../test/helpers/channels/command-contract.js";
-import { whatsappOutbound } from "../../test/helpers/infra/deliver-test-outbounds.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -40,6 +36,85 @@ let testRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
 let fixtureRoot = "";
 let fixtureCount = 0;
 
+function normalizeWhatsAppTargetForTest(raw: string): string | null {
+  const trimmed = raw
+    .trim()
+    .replace(/^whatsapp:/i, "")
+    .trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lowered = trimmed.toLowerCase().replace(/\s+/gu, "");
+  if (/^\d+@g\.us$/u.test(lowered)) {
+    return lowered;
+  }
+  const digits = trimmed.replace(/\D/gu, "");
+  const normalized = digits ? `+${digits}` : "";
+  return /^\+\d{7,15}$/u.test(normalized) ? normalized : null;
+}
+
+function isWhatsAppGroupJidForTest(raw: string): boolean {
+  return /^\d+@g\.us$/u.test(raw.trim().toLowerCase());
+}
+
+const whatsappOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "gateway",
+  sendText: async ({ cfg, to, text, accountId, deps }) => {
+    const sender = deps?.whatsapp as
+      | ((
+          to: string,
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ messageId: string } & Record<string, unknown>>)
+      | undefined;
+    if (!sender) {
+      throw new Error("missing whatsapp sender");
+    }
+    const result = await sender(to, text, {
+      verbose: false,
+      cfg,
+      accountId: accountId ?? undefined,
+    });
+    return {
+      channel: "whatsapp",
+      ...result,
+    };
+  },
+  sendMedia: async ({
+    cfg,
+    to,
+    text,
+    mediaUrl,
+    mediaLocalRoots,
+    mediaReadFile,
+    accountId,
+    deps,
+  }) => {
+    const sender = deps?.whatsapp as
+      | ((
+          to: string,
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ messageId: string } & Record<string, unknown>>)
+      | undefined;
+    if (!sender) {
+      throw new Error("missing whatsapp sender");
+    }
+    const result = await sender(to, text, {
+      verbose: false,
+      cfg,
+      mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId: accountId ?? undefined,
+    });
+    return {
+      channel: "whatsapp",
+      ...result,
+    };
+  },
+};
+
 function resolveWhatsAppTargetForTest(params: {
   to: string | null | undefined;
   allowFrom: Array<string | number> | null | undefined;
@@ -51,9 +126,9 @@ function resolveWhatsAppTargetForTest(params: {
   const hasWildcard = allowListRaw.includes("*");
   const allowList = allowListRaw
     .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTarget(entry))
+    .map((entry) => normalizeWhatsAppTargetForTest(entry))
     .filter((entry): entry is string => Boolean(entry));
-  const normalizedTarget = normalizeWhatsAppTarget(trimmed);
+  const normalizedTarget = normalizeWhatsAppTargetForTest(trimmed);
 
   if (!normalizedTarget) {
     return {
@@ -61,7 +136,7 @@ function resolveWhatsAppTargetForTest(params: {
       error: new Error('Missing target for WhatsApp; expected "<E.164|group JID>".'),
     };
   }
-  if (isWhatsAppGroupJid(normalizedTarget)) {
+  if (isWhatsAppGroupJidForTest(normalizedTarget)) {
     return { ok: true as const, to: normalizedTarget };
   }
   if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTarget)) {
@@ -87,7 +162,7 @@ beforeAll(async () => {
   const whatsappPlugin = createOutboundTestPlugin({
     id: "whatsapp",
     outbound: {
-      ...whatsappOutbound,
+      ...whatsappOutboundForTest,
       resolveTarget: ({ to, allowFrom }) =>
         resolveWhatsAppTargetForTest({
           to,
@@ -547,7 +622,7 @@ describe("runHeartbeatOnce", () => {
   it("runs exec-event wake even when normal heartbeat gates are disabled", async () => {
     const tmpDir = await createCaseDir("hb-exec-event-bypass");
     const storePath = path.join(tmpDir, "sessions.json");
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    const replySpy = vi.fn();
     try {
       const cfg: OpenClawConfig = {
         agents: {
@@ -571,7 +646,7 @@ describe("runHeartbeatOnce", () => {
             sessionId: "sid-exec-event",
             updatedAt: Date.now(),
             lastChannel: "whatsapp",
-            lastTo: "+1555",
+            lastTo: "+15555550123",
           },
         }),
       );
@@ -579,34 +654,30 @@ describe("runHeartbeatOnce", () => {
       replySpy.mockResolvedValue({ text: "exec completed output" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
         messageId: "exec-msg-1",
-        toJid: "jid:+1555",
+        toJid: "jid:+15555550123",
       });
-
       setHeartbeatsEnabled(false);
       const res = await runHeartbeatOnce({
         cfg,
         agentId: "main",
         sessionKey,
         reason: "exec-event",
-        deps: {
-          sendWhatsApp,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-          webAuthExists: async () => true,
-          hasActiveWebListener: () => true,
-        },
+        deps: createHeartbeatDeps(sendWhatsApp, {
+          nowMs: 0,
+          getReplyFromConfig: replySpy,
+        }),
       });
 
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
       expect(sendWhatsApp).toHaveBeenCalledWith(
-        "+1555",
+        "+15555550123",
         "exec completed output",
         expect.any(Object),
       );
     } finally {
       setHeartbeatsEnabled(true);
-      replySpy.mockRestore();
+      replySpy.mockReset();
     }
   });
 

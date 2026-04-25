@@ -1,4 +1,4 @@
-import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
 import type { ComputerUseSessionConfig } from "../computer-use/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -132,7 +132,7 @@ function applyModelProviderToolPolicy(
     modelCompat?: ModelCompatConfig;
   },
 ): AnyAgentTool[] {
-  if (params?.config?.agents?.defaults?.localModelMode === "lean") {
+  if (params?.config?.agents?.defaults?.experimental?.localModelLean === true) {
     const leanDeny = new Set(["browser", "cron", "message"]);
     tools = tools.filter((tool) => !leanDeny.has(tool.name));
   }
@@ -423,8 +423,8 @@ export function createOpenClawCodingTools(options?: {
   }
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
 
-  const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
-    if (tool.name === readTool.name) {
+  const base = (createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]).flatMap((tool) => {
+    if (tool.name === "read") {
       if (sandboxRoot) {
         const sandboxed = createSandboxedReadTool({
           root: sandboxRoot,

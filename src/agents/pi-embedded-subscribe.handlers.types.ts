@@ -61,12 +61,15 @@ export type EmbeddedPiSubscribeState = {
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
   lastAssistantTextTrimmed?: string;
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
+  pendingAssistantUsage?: NormalizedUsage;
+  assistantUsageCommitted: boolean;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
@@ -88,6 +91,11 @@ export type EmbeddedPiSubscribeState = {
   pendingMessagingMediaUrls: Map<string, string[]>;
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
+  pendingToolTrustedLocalMedia: boolean;
+  pendingAssistantReplyDirectives?: Pick<
+    BlockReplyPayload,
+    "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
+  >;
   deterministicApprovalPromptPending: boolean;
   deterministicApprovalPromptSent: boolean;
   lastAssistant?: AgentMessage;
@@ -100,6 +108,7 @@ export type EmbeddedPiSubscribeContext = {
   blockChunking?: BlockReplyChunking;
   blockChunker: EmbeddedBlockChunker | null;
   hookRunner?: HookRunner;
+  builtinToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
@@ -110,7 +119,7 @@ export type EmbeddedPiSubscribeContext = {
     text: string,
     state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ) => string;
-  emitBlockChunk: (text: string) => void;
+  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
   flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
@@ -134,6 +143,7 @@ export type EmbeddedPiSubscribeContext = {
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
   recordAssistantUsage: (usage: unknown) => void;
+  commitAssistantUsage: () => void;
   incrementCompactionCount: () => void;
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
@@ -148,8 +158,9 @@ export type EmbeddedPiSubscribeContext = {
 export type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
-  | "agentId"
   | "sessionKey"
+  | "sessionId"
+  | "agentId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onToolResult"
@@ -171,6 +182,7 @@ export type ToolHandlerState = Pick<
   | "pendingMessagingMediaUrls"
   | "pendingToolMediaUrls"
   | "pendingToolAudioAsVoice"
+  | "pendingToolTrustedLocalMedia"
   | "replayState"
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
@@ -186,6 +198,7 @@ export type ToolHandlerContext = {
   state: ToolHandlerState;
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
+  builtinToolNames?: ReadonlySet<string>;
   flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;

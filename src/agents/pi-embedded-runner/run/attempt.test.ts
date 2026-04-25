@@ -3,15 +3,15 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   isOllamaCompatProvider,
   resolveOllamaBaseUrlForRun,
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama.js";
-import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { buildAgentSystemPrompt } from "../../system-prompt.js";
+} from "../ollama-runtime-facade.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
   injectPromptImagesIntoUserMessage,
@@ -385,10 +385,10 @@ describe("resolvePromptModeForSession", () => {
 
 describe("shouldInjectHeartbeatPrompt", () => {
   it("uses trigger policy defaults for non-cron triggers", () => {
-    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("user")).toBe(false);
     expect(shouldInjectHeartbeatPromptForTrigger("heartbeat")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(true);
-    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(true);
+    expect(shouldInjectHeartbeatPromptForTrigger("memory")).toBe(false);
+    expect(shouldInjectHeartbeatPromptForTrigger(undefined)).toBe(false);
   });
 
   it("uses trigger policy overrides for cron", () => {
@@ -396,10 +396,10 @@ describe("shouldInjectHeartbeatPrompt", () => {
   });
 
   it("injects the heartbeat prompt for default-agent non-cron runs", () => {
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "user" })).toBe(false);
     expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "heartbeat" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(true);
-    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(true);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: "memory" })).toBe(false);
+    expect(shouldInjectHeartbeatPrompt({ isDefaultAgent: true, trigger: undefined })).toBe(false);
   });
 
   it("suppresses the heartbeat prompt for cron-triggered runs", () => {
@@ -1957,7 +1957,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
   });
 
-  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+  it("applies compaction.model when building afterTurn runtime context", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -1987,11 +1987,9 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
-    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
     expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.4",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {

@@ -35,6 +35,7 @@ import { resolveConversationIdFromTargets } from "../../infra/outbound/conversat
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -51,7 +52,11 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-fork.js";
+import {
+  forkSessionFromParent,
+  resolveParentForkMaxTokens,
+  resolveParentForkTokenCount,
+} from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
@@ -336,8 +341,10 @@ export async function initSessionState(params: {
   // "/NEW" etc. Match case-insensitively while keeping the original casing for any stripped body.
   const trimmedBodyLower = trimmedBody.toLowerCase();
   const strippedForResetLower = strippedForReset.toLowerCase();
+  const isSoftResetRequest = /^\/reset\s*:?\s*soft\b/u.test(strippedForResetLower);
+  const isAuthorizedSoftResetRequest = resetAuthorized && isSoftResetRequest;
 
-  for (const trigger of resetTriggers) {
+  for (const trigger of isAuthorizedSoftResetRequest ? [] : resetTriggers) {
     if (!trigger) {
       continue;
     }
@@ -408,9 +415,19 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  const entryHasSessionId =
+    typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0;
+  const hasProviderOwnedCliSession =
+    Boolean(entry?.cliSessionBindings && Object.keys(entry.cliSessionBindings).length > 0) ||
+    Boolean(entry?.claudeCliSessionId);
+  const hasExplicitResetPolicy = Boolean(sessionCfg?.reset || channelReset);
+  const freshEntry =
+    entry && entryHasSessionId
+      ? isAuthorizedSoftResetRequest ||
+        (!resetTriggered && hasProviderOwnedCliSession && !hasExplicitResetPolicy)
+        ? true
+        : evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+      : false;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -448,11 +465,18 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      if (entry.modelOverrideSource !== "auto") {
+        persistedModelOverride = entry.modelOverride;
+        persistedProviderOverride = entry.providerOverride;
+      }
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      if (entry.authProfileOverrideSource === "auto") {
+        persistedAuthProfileOverride = undefined;
+        persistedAuthProfileOverrideSource = undefined;
+        persistedAuthProfileOverrideCompactionCount = undefined;
+      }
       persistedLabel = entry.label;
       preservedEntryFields = {
         spawnedBy: entry.spawnedBy,
@@ -463,6 +487,17 @@ export async function initSessionState(params: {
         subagentRole: entry.subagentRole,
         subagentControlScope: entry.subagentControlScope,
         displayName: entry.displayName,
+      };
+    } else if (entry && !entryHasSessionId) {
+      preservedEntryFields = {
+        groupActivation: entry.groupActivation,
+        displayName: entry.displayName,
+        chatType: entry.chatType,
+        channel: entry.channel,
+        groupId: entry.groupId,
+        subject: entry.subject,
+        groupChannel: entry.groupChannel,
+        space: entry.space,
       };
     }
   }
@@ -589,7 +624,13 @@ export async function initSessionState(params: {
     sessionStore[parentSessionKey] &&
     !alreadyForked
   ) {
-    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    const parentTokens =
+      (await resolveParentForkTokenCount({
+        parentEntry: sessionStore[parentSessionKey],
+        storePath,
+      })) ??
+      sessionStore[parentSessionKey].totalTokens ??
+      0;
     if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
       // Parent context is too large — forking would create a thread session
       // that immediately overflows the model's context window. Start fresh
@@ -699,6 +740,9 @@ export async function initSessionState(params: {
       agentId,
       reason: "reset",
     });
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+    }).catch(() => {});
   }
 
   const sessionCtx: TemplateContext = {

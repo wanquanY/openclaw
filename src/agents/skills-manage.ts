@@ -370,7 +370,10 @@ export async function installWorkspaceSkillFromNpmSpec(params: {
     },
   });
   if (result.ok) {
-    return result.result;
+    return result;
+  }
+  if ("message" in result) {
+    return result;
   }
   return {
     ok: false,

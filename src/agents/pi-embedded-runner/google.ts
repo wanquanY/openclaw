@@ -1,5 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 export { sanitizeSessionHistory } from "./replay-history.js";
 

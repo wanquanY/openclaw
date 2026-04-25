@@ -1,18 +1,25 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import {
   COMPUTER_USE_HOST_POLICIES,
   COMPUTER_USE_MODEL_POLICY_MODES,
   COMPUTER_USE_MODES,
   COMPUTER_USE_SCOPE_TYPES,
+  type ComputerUseHostPolicy,
+  type ComputerUseMode,
+  type ComputerUseModelPolicyMode,
+  type ComputerUseScopeType,
 } from "./types.js";
 
-function literalUnion<T extends readonly string[]>(values: T) {
-  return Type.Union(values.map((value) => Type.Literal(value)));
+function stringEnum<T extends string>(values: readonly T[]) {
+  return Type.Unsafe<T>({
+    type: "string",
+    enum: [...values],
+  });
 }
 
 export const ComputerUseScopeSchema = Type.Object(
   {
-    type: literalUnion(COMPUTER_USE_SCOPE_TYPES),
+    type: stringEnum<ComputerUseScopeType>(COMPUTER_USE_SCOPE_TYPES),
     windowId: Type.Optional(Type.String()),
     displayId: Type.Optional(Type.String()),
   },
@@ -21,7 +28,7 @@ export const ComputerUseScopeSchema = Type.Object(
 
 export const ComputerUseModelPolicySchema = Type.Object(
   {
-    mode: literalUnion(COMPUTER_USE_MODEL_POLICY_MODES),
+    mode: stringEnum<ComputerUseModelPolicyMode>(COMPUTER_USE_MODEL_POLICY_MODES),
     executorModel: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -37,9 +44,9 @@ export const ComputerUseApprovalsSchema = Type.Object(
 export const ComputerUseSessionConfigSchema = Type.Object(
   {
     enabled: Type.Boolean(),
-    mode: literalUnion(COMPUTER_USE_MODES),
+    mode: stringEnum<ComputerUseMode>(COMPUTER_USE_MODES),
     scope: ComputerUseScopeSchema,
-    hostPolicy: literalUnion(COMPUTER_USE_HOST_POLICIES),
+    hostPolicy: stringEnum<ComputerUseHostPolicy>(COMPUTER_USE_HOST_POLICIES),
     modelPolicy: ComputerUseModelPolicySchema,
     approvals: ComputerUseApprovalsSchema,
   },
