@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import semverSatisfies from "semver/functions/satisfies.js";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
-const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EACCES", "EBUSY", "ENOTEMPTY", "EPERM"]);
 const TEMP_REMOVE_RETRY_DELAYS_MS = [10, 25, 50];
 
 function readJson(filePath) {
@@ -24,8 +24,34 @@ function readOptionalUtf8(filePath) {
   return fs.readFileSync(filePath, "utf8");
 }
 
+function ensureOwnerWritableRecursively(targetPath) {
+  if (!fs.existsSync(targetPath)) {
+    return;
+  }
+  const stat = fs.lstatSync(targetPath);
+  if (stat.isSymbolicLink()) {
+    return;
+  }
+  if (stat.isDirectory()) {
+    fs.chmodSync(targetPath, (stat.mode & 0o777) | 0o300);
+    for (const name of fs.readdirSync(targetPath)) {
+      ensureOwnerWritableRecursively(path.join(targetPath, name));
+    }
+    return;
+  }
+  fs.chmodSync(targetPath, (stat.mode & 0o777) | 0o200);
+}
+
 function removePathIfExists(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  } catch (error) {
+    if (!isTransientTempRemoveError(error)) {
+      throw error;
+    }
+    ensureOwnerWritableRecursively(targetPath);
+    fs.rmSync(targetPath, { recursive: true, force: true });
+  }
 }
 
 function isTransientTempRemoveError(error) {

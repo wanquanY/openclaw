@@ -3,9 +3,11 @@ import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js
 import type { ClaudeCliCredential } from "./cli-credentials.js";
 
 const mocks = vi.hoisted(() => ({
-  readClaudeCliCredentialsCached: vi.fn<() => ClaudeCliCredential | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
-  readMiniMaxCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
+    () => null,
+  ),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
+  readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
 let readManagedExternalCliCredential: typeof import("./auth-profiles/external-cli-sync.js").readManagedExternalCliCredential;
@@ -265,6 +267,41 @@ describe("external cli oauth resolution", () => {
         }),
       },
     ]);
+  });
+
+  it("does not read unrelated external CLI credentials when scoped to a provider", () => {
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerRefs: ["video-workflow"],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("passes keychain suppression through to the scoped external CLI reader", () => {
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "codex-cli-access",
+        refresh: "codex-cli-refresh",
+        expires: Date.now() + 5 * 24 * 60 * 60_000,
+      }),
+    );
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerRefs: ["openai-codex"],
+      allowKeychainPrompt: false,
+    });
+
+    expect(profiles).toHaveLength(1);
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith(
+      expect.objectContaining({ allowKeychainPrompt: false }),
+    );
+    expect(mocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
   it("keeps any existing default codex oauth over Codex CLI bootstrap credentials", () => {

@@ -233,6 +233,34 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
+  it("uses active non-speech capability providers even with explicit plugin config", () => {
+    const active = createEmptyPluginRegistry();
+    active.imageGenerationProviders.push({
+      pluginId: "native-image",
+      pluginName: "Native Image",
+      source: "test",
+      provider: {
+        id: "native-image",
+        generate: vi.fn(),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "imageGenerationProviders",
+      cfg: {
+        plugins: {
+          allow: ["native-image"],
+          entries: { "native-image": { enabled: true } },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["native-image"]);
+    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+  });
+
   it("keeps active speech providers when cfg requests an active provider alias", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

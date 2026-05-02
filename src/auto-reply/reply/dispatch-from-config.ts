@@ -116,6 +116,25 @@ function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimePromise;
 }
 
+export async function prewarmDispatchReplyRuntime(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+}): Promise<void> {
+  const [runtimePlugins, getReplyRuntime] = await Promise.all([
+    loadRuntimePlugins(),
+    loadGetReplyFromConfigRuntime(),
+    loadAbortRuntime(),
+    loadReplyMediaPathsRuntime(),
+    loadRouteReplyRuntime(),
+  ]);
+  runtimePlugins.ensureRuntimePluginsLoaded({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
+  await getReplyRuntime.prewarmGetReplyRuntime();
+}
+
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
@@ -282,6 +301,26 @@ export async function dispatchReplyFromConfig(
   const sessionKey = ctx.SessionKey;
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const timingStartedAt = Date.now();
+  let timingLastAt = timingStartedAt;
+  const emitTiming = (stage: string, data?: Record<string, unknown>) => {
+    if (!params.replyOptions?.onTiming) {
+      return;
+    }
+    const now = Date.now();
+    params.replyOptions.onTiming({
+      stage: `dispatch.${stage}`,
+      elapsedMs: now - timingStartedAt,
+      deltaMs: now - timingLastAt,
+      ...(data ? { data } : {}),
+    });
+    timingLastAt = now;
+  };
+  emitTiming("start", {
+    channel,
+    sessionKey,
+    hasReplyResolver: Boolean(params.replyResolver),
+  });
 
   const recordProcessed = (
     outcome: "completed" | "skipped" | "error",
@@ -330,6 +369,7 @@ export async function dispatchReplyFromConfig(
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
+    emitTiming("dedupe_skipped", { status: inboundDedupeClaim.status });
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
   }
@@ -367,6 +407,11 @@ export async function dispatchReplyFromConfig(
   const { ensureRuntimePluginsLoaded } = await loadRuntimePlugins();
   ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
   const hookRunner = getGlobalHookRunner();
+  emitTiming("session_and_plugins_ready", {
+    sessionAgentId,
+    acpDispatchSessionKey,
+    hasHookRunner: Boolean(hookRunner),
+  });
 
   // Extract message context for hooks (plugin and internal)
   const timestamp =
@@ -436,6 +481,11 @@ export async function dispatchReplyFromConfig(
     requesterSenderName: ctx.SenderName,
     requesterSenderUsername: ctx.SenderUsername,
     requesterSenderE164: ctx.SenderE164,
+  });
+  emitTiming("routing_and_media_ready", {
+    shouldRouteToOriginating,
+    deliveryChannel,
+    hasRouteReplyCandidate,
   });
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
@@ -596,6 +646,7 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
+          emitTiming("plugin_bound_claim_done", { status: targetedClaimOutcome.status });
           if (targetedClaimOutcome.result.reply) {
             await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
           }
@@ -605,6 +656,7 @@ export async function dispatchReplyFromConfig(
         }
         case "missing_plugin":
         case "no_handler": {
+          emitTiming("plugin_bound_claim_done", { status: targetedClaimOutcome.status });
           pluginFallbackReason =
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
@@ -621,6 +673,7 @@ export async function dispatchReplyFromConfig(
           break;
         }
         case "declined": {
+          emitTiming("plugin_bound_claim_done", { status: targetedClaimOutcome.status });
           await sendBindingNotice(
             { text: buildPluginBindingDeclinedText(pluginOwnedBinding) },
             "terminal",
@@ -630,6 +683,10 @@ export async function dispatchReplyFromConfig(
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
         }
         case "error": {
+          emitTiming("plugin_bound_claim_done", {
+            status: targetedClaimOutcome.status,
+            error: targetedClaimOutcome.error,
+          });
           logVerbose(
             `plugin-bound inbound claim failed for ${pluginOwnedBinding.pluginId}: ${targetedClaimOutcome.error}`,
           );
@@ -680,6 +737,7 @@ export async function dispatchReplyFromConfig(
       throw new Error("abort runtime unavailable");
     }
     const fastAbort = await fastAbortResolver({ ctx, cfg });
+    emitTiming("fast_abort_checked", { handled: fastAbort.handled });
     if (fastAbort.handled) {
       let queuedFinal = false;
       let routedFinalCount = 0;
@@ -769,6 +827,9 @@ export async function dispatchReplyFromConfig(
           senderId: hookContext.senderId,
         },
       );
+      emitTiming("before_dispatch_hook_done", {
+        handled: beforeDispatchResult?.handled === true,
+      });
       if (beforeDispatchResult?.handled) {
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
@@ -812,6 +873,9 @@ export async function dispatchReplyFromConfig(
           markIdle,
         },
       );
+      emitTiming("reply_dispatch_hook_done", {
+        handled: replyDispatchResult?.handled === true,
+      });
       if (replyDispatchResult?.handled) {
         return {
           queuedFinal: replyDispatchResult.queuedFinal,
@@ -975,8 +1039,13 @@ export async function dispatchReplyFromConfig(
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
 
+    const replyRuntimeLoadStartedAt = Date.now();
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
+    emitTiming("reply_resolver_ready", {
+      customResolver: Boolean(params.replyResolver),
+      runtimeLoadMs: Date.now() - replyRuntimeLoadStartedAt,
+    });
     const replyResult = await replyResolver(
       ctx,
       {
@@ -1110,6 +1179,11 @@ export async function dispatchReplyFromConfig(
       },
       params.configOverride,
     );
+    const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    emitTiming("reply_resolver_done", {
+      replyCount: replies.length,
+      suppressDelivery,
+    });
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.
@@ -1150,8 +1224,6 @@ export async function dispatchReplyFromConfig(
         }
       }
     }
-
-    const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
     let queuedFinal = false;
     let routedFinalCount = 0;
@@ -1221,6 +1293,12 @@ export async function dispatchReplyFromConfig(
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    emitTiming("delivery_done", {
+      queuedFinal,
+      counts,
+      routedFinalCount,
+      replyCount: replies.length,
+    });
     if (inboundDedupeClaim.status === "claimed") {
       commitInboundDedupe(inboundDedupeClaim.key);
     }
@@ -1231,6 +1309,7 @@ export async function dispatchReplyFromConfig(
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
+    emitTiming("error", { error: String(err) });
     if (inboundDedupeClaim.status === "claimed") {
       releaseInboundDedupe(inboundDedupeClaim.key);
     }

@@ -25,6 +25,7 @@ const resolveModelAsyncMock = vi.fn<
     modelId: unknown,
     agentDir: unknown,
     cfg: unknown,
+    options?: unknown,
   ) => Promise<{ model?: { id: string; provider: string; api: string }; error?: string }>
 >(async () => ({
   model: {
@@ -57,8 +58,13 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
     cfg: unknown,
     options?: unknown,
   ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
-  resolveModelAsync: (provider: unknown, modelId: unknown, agentDir: unknown, cfg: unknown) =>
-    resolveModelAsyncMock(provider, modelId, agentDir, cfg),
+  resolveModelAsync: (
+    provider: unknown,
+    modelId: unknown,
+    agentDir: unknown,
+    cfg: unknown,
+    options?: unknown,
+  ) => resolveModelAsyncMock(provider, modelId, agentDir, cfg, options),
 }));
 
 vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
@@ -104,6 +110,13 @@ describe("gateway startup primary model warmup", () => {
     expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
       skipProviderRuntimeHooks: true,
     });
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
+      "openai-codex",
+      "gpt-5.4",
+      "/tmp/agent",
+      cfg,
+      { retryTransientProviderRuntimeMiss: true },
+    );
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {
@@ -234,7 +247,9 @@ describe("gateway startup primary model warmup", () => {
 
     await prewarmConfiguredPrimaryModel({ cfg, log: { warn } });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith("codex", "gpt-5.4", "/tmp/agent", cfg);
+    expect(resolveModelAsyncMock).toHaveBeenCalledWith("codex", "gpt-5.4", "/tmp/agent", cfg, {
+      retryTransientProviderRuntimeMiss: true,
+    });
     expect(warn).not.toHaveBeenCalled();
   });
 

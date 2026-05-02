@@ -134,6 +134,25 @@ describe("createMusicGenerateTool", () => {
     expect(createMusicGenerateTool({ config: asConfig({}) })).toBeNull();
   });
 
+  it("can defer music-generation provider resolution until execution", async () => {
+    const listSpy = vi
+      .spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders")
+      .mockReturnValue([]);
+    listSpy.mockClear();
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({}),
+      deferModelConfig: true,
+    });
+
+    expect(tool).not.toBeNull();
+    expect(listSpy).not.toHaveBeenCalled();
+    await expect(tool!.execute("call-deferred", { prompt: "compose" })).rejects.toThrow(
+      "No music-generation model configured",
+    );
+    expect(listSpy).toHaveBeenCalled();
+  });
+
   it("registers when music-generation config is present", () => {
     expect(
       createMusicGenerateTool({

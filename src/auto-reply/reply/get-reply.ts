@@ -90,6 +90,18 @@ function loadHookRunnerGlobal() {
   return hookRunnerGlobalPromise;
 }
 
+export async function prewarmGetReplyRuntime(): Promise<void> {
+  await Promise.all([
+    loadSessionResetModelRuntime(),
+    loadStageSandboxMediaRuntime(),
+    loadMediaUnderstandingApplyRuntime(),
+    loadLinkUnderstandingApplyRuntime(),
+    loadCommandsCoreRuntime(),
+    loadHookRunnerGlobal(),
+    import("./get-reply-run.js").then((runtime) => runtime.prewarmGetReplyRunRuntime()),
+  ]);
+}
+
 function loadOriginRouting() {
   originRoutingPromise ??= import("./origin-routing.js");
   return originRoutingPromise;
@@ -165,6 +177,25 @@ export async function getReplyFromConfig(
     isFastTestEnv,
     configOverride,
   });
+  const timingStartedAt = Date.now();
+  let timingLastAt = timingStartedAt;
+  const emitTiming = (stage: string, data?: Record<string, unknown>) => {
+    if (!opts?.onTiming) {
+      return;
+    }
+    const now = Date.now();
+    opts.onTiming({
+      stage: `get_reply.${stage}`,
+      elapsedMs: now - timingStartedAt,
+      deltaMs: now - timingLastAt,
+      ...(data ? { data } : {}),
+    });
+    timingLastAt = now;
+  };
+  emitTiming("start", {
+    sessionKey: ctx.SessionKey,
+    commandSource: ctx.CommandSource,
+  });
   const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
     isFastTestEnv,
     configOverride,
@@ -217,6 +248,12 @@ export async function getReplyFromConfig(
       hasResolvedHeartbeatModelOverride = true;
     }
   }
+  emitTiming("config_and_model_ready", {
+    agentId,
+    provider,
+    model,
+    isHeartbeat: opts?.isHeartbeat === true,
+  });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = useFastTestBootstrap
@@ -226,6 +263,7 @@ export async function getReplyFromConfig(
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
       });
   const workspaceDir = workspace.dir;
+  emitTiming("workspace_ready", { workspaceDir });
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -258,6 +296,10 @@ export async function getReplyFromConfig(
   emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
+    isFastTestEnv,
+  });
+  emitTiming("preprocess_done", {
+    hasInboundMedia: hasInboundMedia(finalized),
     isFastTestEnv,
   });
 
@@ -293,6 +335,12 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  emitTiming("session_state_ready", {
+    sessionKey,
+    isNewSession,
+    resetTriggered,
+    systemSent,
+  });
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
@@ -310,6 +358,7 @@ export async function getReplyFromConfig(
       defaultModel,
       aliasIndex,
     });
+    emitTiming("reset_model_override_done");
   }
 
   const channelModelOverride = cfg.channels?.modelByChannel
@@ -357,6 +406,12 @@ export async function getReplyFromConfig(
       model = resolved.ref.model;
     }
   }
+  emitTiming("model_overrides_resolved", {
+    provider,
+    model,
+    hasSessionModelOverride,
+    hasChannelModelOverride: Boolean(channelModelOverride),
+  });
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -376,7 +431,8 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       commandAuthorized,
     });
-    return runPreparedReply({
+    emitTiming("fast_directive_run_prepared_start", { provider, model });
+    const fastReply = await runPreparedReply({
       ctx,
       sessionCtx,
       cfg,
@@ -430,6 +486,10 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
     });
+    emitTiming("fast_directive_run_prepared_done", {
+      replyCount: fastReply ? (Array.isArray(fastReply) ? fastReply.length : 1) : 0,
+    });
+    return fastReply;
   }
 
   const directiveResult = await resolveReplyDirectives({
@@ -460,6 +520,7 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (directiveResult.kind === "reply") {
+    emitTiming("directives_resolved", { kind: "reply" });
     return directiveResult.reply;
   }
 
@@ -493,6 +554,13 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+  emitTiming("directives_resolved", {
+    kind: "run",
+    provider,
+    model,
+    contextTokens,
+    blockStreamingEnabled,
+  });
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
@@ -558,11 +626,13 @@ export async function getReplyFromConfig(
   });
   if (inlineActionResult.kind === "reply") {
     await maybeEmitMissingResetHooks();
+    emitTiming("inline_actions_done", { kind: "reply" });
     return inlineActionResult.reply;
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  emitTiming("inline_actions_done", { kind: "run" });
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
@@ -586,6 +656,9 @@ export async function getReplyFromConfig(
           channelId: hookMessageProvider,
         },
       );
+      emitTiming("before_agent_reply_hook_done", {
+        handled: hookResult?.handled === true,
+      });
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
@@ -601,9 +674,11 @@ export async function getReplyFromConfig(
       sessionKey,
       workspaceDir,
     });
+    emitTiming("sandbox_media_done");
   }
 
-  return runPreparedReply({
+  emitTiming("run_prepared_start", { provider, model });
+  const reply = await runPreparedReply({
     ctx,
     sessionCtx,
     cfg,
@@ -648,4 +723,8 @@ export async function getReplyFromConfig(
     workspaceDir,
     abortedLastRun,
   });
+  emitTiming("run_prepared_done", {
+    replyCount: reply ? (Array.isArray(reply) ? reply.length : 1) : 0,
+  });
+  return reply;
 }

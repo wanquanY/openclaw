@@ -458,7 +458,9 @@ export function readClaudeCliCredentialsCached(options?: {
   return readCachedCliCredential({
     ttlMs: options?.ttlMs ?? 0,
     cache: claudeCliCache,
-    cacheKey: resolveClaudeCliCredentialsPath(options?.homeDir),
+    cacheKey: `${options?.platform ?? process.platform}|${resolveClaudeCliCredentialsPath(
+      options?.homeDir,
+    )}`,
     read: () =>
       readClaudeCliCredentials({
         allowKeychainPrompt: options?.allowKeychainPrompt,
@@ -592,14 +594,18 @@ export function writeClaudeCliCredentials(
 
 export function readCodexCliCredentials(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
-  const keychain = readCodexKeychainCredentials({
-    codexHome: options?.codexHome,
-    platform: options?.platform,
-    execSync: options?.execSync,
-  });
+  const keychain =
+    options?.allowKeychainPrompt === false
+      ? null
+      : readCodexKeychainCredentials({
+          codexHome: options?.codexHome,
+          platform: options?.platform,
+          execSync: options?.execSync,
+        });
   if (keychain) {
     return keychain;
   }
@@ -648,6 +654,7 @@ export function readCodexCliCredentials(options?: {
 
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
+  allowKeychainPrompt?: boolean;
   ttlMs?: number;
   platform?: NodeJS.Platform;
   execSync?: ExecSyncFn;
@@ -660,6 +667,7 @@ export function readCodexCliCredentialsCached(options?: {
     read: () =>
       readCodexCliCredentials({
         codexHome: options?.codexHome,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
         platform: options?.platform,
         execSync: options?.execSync,
       }),

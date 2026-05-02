@@ -47,7 +47,11 @@ import {
   resolveMediaToolLocalRoots,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -186,10 +190,14 @@ export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): ToolModelConfig | null {
+  const explicit = coerceToolModelConfig(params.cfg?.agents?.defaults?.imageGenerationModel);
+  if (hasToolModelConfig(explicit)) {
+    return explicit;
+  }
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
-    modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
+    modelConfig: explicit,
     providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
 }
@@ -545,18 +553,20 @@ export function createImageGenerateTool(options?: {
   workspaceDir?: string;
   sandbox?: ImageGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const cfg = options?.config ?? loadConfig();
-  const imageGenerationModelConfig = resolveImageGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
+  const imageGenerationModelConfig = options?.deferModelConfig
+    ? null
+    : resolveImageGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
   if (!imageGenerationModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
-  const effectiveCfg =
-    applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -576,6 +586,9 @@ export function createImageGenerateTool(options?: {
       const params = args as Record<string, unknown>;
       const action = resolveAction(params);
       if (action === "list") {
+        const effectiveCfg = imageGenerationModelConfig
+          ? (applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg)
+          : cfg;
         const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
         const providers = runtimeProviders.map((provider) =>
           Object.assign(
@@ -631,6 +644,20 @@ export function createImageGenerateTool(options?: {
         };
       }
 
+      const resolvedImageGenerationModelConfig =
+        imageGenerationModelConfig ??
+        resolveImageGenerationModelConfigForTool({
+          cfg,
+          agentDir: options?.agentDir,
+        });
+      if (!resolvedImageGenerationModelConfig) {
+        throw new ToolInputError(
+          "No image-generation model configured. Set agents.defaults.imageGenerationModel.primary to a provider/model, or configure an image-generation provider first.",
+        );
+      }
+      const effectiveCfg =
+        applyImageGenerationModelConfigDefaults(cfg, resolvedImageGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
@@ -638,13 +665,14 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
-      const timeoutMs = readGenerationTimeoutMs(params) ?? imageGenerationModelConfig.timeoutMs;
+      const timeoutMs =
+        readGenerationTimeoutMs(params) ?? resolvedImageGenerationModelConfig.timeoutMs;
       const quality = normalizeQuality(readStringParam(params, "quality"));
       const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
       const providerOptions = normalizeProviderOptions(params);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
-        imageGenerationModelConfig,
+        imageGenerationModelConfig: resolvedImageGenerationModelConfig,
         modelOverride: model,
       });
       const count = resolveRequestedCount(params);

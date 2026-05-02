@@ -218,6 +218,22 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("can defer image-generation provider resolution until execution", async () => {
+    const listSpy = vi
+      .spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders")
+      .mockReturnValue([]);
+    listSpy.mockClear();
+
+    const tool = createImageGenerateTool({ config: {}, deferModelConfig: true });
+
+    expect(tool).not.toBeNull();
+    expect(listSpy).not.toHaveBeenCalled();
+    await expect(tool!.execute("call-deferred", { prompt: "paint" })).rejects.toThrow(
+      "No image-generation model configured",
+    );
+    expect(listSpy).toHaveBeenCalled();
+  });
+
   it("matches image-generation providers across canonical provider aliases", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {

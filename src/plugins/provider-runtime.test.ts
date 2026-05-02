@@ -612,6 +612,28 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("does not resolve auth profile hooks through unscoped provider discovery", () => {
+    resolvePluginProvidersMock.mockImplementation(
+      (params?: { providerRefs?: readonly string[] }) => {
+        expect(params?.providerRefs).toEqual(["video-workflow"]);
+        return [];
+      },
+    );
+
+    expect(
+      resolveProviderAuthProfileId({
+        provider: "video-workflow",
+        context: createDemoRuntimeContext({
+          provider: "video-workflow",
+          modelId: "gpt-5.4",
+          profileOrder: [],
+          authStore: { version: 1, profiles: {}, order: {} },
+        }),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
   it("applies the shared GPT-5 prompt overlay for any provider", () => {
     const contribution = resolveProviderSystemPromptContribution({
       provider: "openrouter",
@@ -916,11 +938,12 @@ describe("provider-runtime", () => {
     ).toBe(wrappedStreamFn);
   });
 
-  it("normalizes transport hooks without needing provider ownership", () => {
+  it("normalizes transport hooks through provider hook aliases without full discovery", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
         id: "google",
         label: "Google",
+        hookAliases: ["google-paid"],
         auth: [],
         normalizeTransport: ({ api, baseUrl }) =>
           api === "google-generative-ai" && baseUrl === "https://generativelanguage.googleapis.com"
@@ -1589,7 +1612,6 @@ describe("provider-runtime", () => {
 
   it("merges compat contributions from owner and foreign provider plugins", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
-      const onlyPluginIds = params.onlyPluginIds ?? [];
       const plugins: ProviderPlugin[] = [
         {
           id: "openrouter",
@@ -1605,9 +1627,18 @@ describe("provider-runtime", () => {
             modelId.startsWith("mistralai/") ? { supportsStore: false } : undefined,
         },
       ];
-      return onlyPluginIds.length > 0
-        ? plugins.filter((plugin) => onlyPluginIds.includes(plugin.id))
-        : plugins;
+      const providerRef = params.providerRefs?.[0];
+      const modelRef = params.modelRefs?.[0];
+      if (providerRef === "openrouter") {
+        return plugins.filter((plugin) => plugin.id === "openrouter");
+      }
+      if (modelRef === "mistralai/mistral-small-3.2-24b-instruct") {
+        return plugins.filter((plugin) => plugin.id === "mistral");
+      }
+      if (params.providerRefs || params.modelRefs || params.onlyPluginIds) {
+        return [];
+      }
+      throw new Error("provider compat hooks must not use unscoped provider discovery");
     });
 
     expect(
@@ -1635,7 +1666,6 @@ describe("provider-runtime", () => {
 
   it("applies foreign transport normalization for custom provider hosts", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
-      const onlyPluginIds = params.onlyPluginIds ?? [];
       const plugins: ProviderPlugin[] = [
         {
           id: "openai",
@@ -1649,9 +1679,13 @@ describe("provider-runtime", () => {
               : undefined,
         },
       ];
-      return onlyPluginIds.length > 0
-        ? plugins.filter((plugin) => onlyPluginIds.includes(plugin.id))
-        : plugins;
+      if (params.modelRefs?.[0] === "gpt-5.4") {
+        return plugins;
+      }
+      if (params.providerRefs || params.modelRefs || params.onlyPluginIds) {
+        return [];
+      }
+      throw new Error("transport compatibility hooks must not use unscoped provider discovery");
     });
 
     expect(
@@ -1758,7 +1792,7 @@ describe("provider-runtime", () => {
     });
 
     expect(result).toBeUndefined();
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps cached provider hook results available during a nested provider load", () => {
@@ -1825,6 +1859,6 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
 
-    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(3);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 });

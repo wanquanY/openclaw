@@ -92,7 +92,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin: () => undefined,
 };
 
-function createEmptyPiDiscoveryStores(): {
+export function createEmptyPiDiscoveryStores(): {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
@@ -336,10 +336,10 @@ function applyConfiguredProviderOverrides(params: {
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
-  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -696,6 +696,99 @@ export function resolveModelWithRegistry(params: {
   }
 
   return resolveConfiguredFallbackModel(normalizedParams);
+}
+
+export function resolveStaticConfiguredModel(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+): {
+  model?: Model<Api>;
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+} {
+  void agentDir;
+  const normalizedProvider = normalizeProviderId(provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, modelId);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedProvider);
+  if (!normalizedProvider || !providerConfig) {
+    return {
+      model: undefined,
+      ...createEmptyPiDiscoveryStores(),
+    };
+  }
+  const configuredModel =
+    providerConfig.models?.find((candidate) => candidate.id === normalizedModelId) ??
+    providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
+  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+    stripSecretRefMarkers: true,
+  });
+  const resolvedApi =
+    normalizeResolvedTransportApi(configuredModel?.api ?? providerConfig?.api) ??
+    "openai-responses";
+  const requestConfig = resolveProviderRequestConfig({
+    provider: normalizedProvider,
+    api: resolvedApi,
+    baseUrl: configuredModel?.baseUrl ?? providerConfig.baseUrl,
+    providerHeaders,
+    modelHeaders,
+    authHeader: providerConfig.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
+  });
+  const model = canonicalizeLegacyResolvedModel({
+    provider: normalizedProvider,
+    model: normalizeResolvedProviderModel({
+      provider: normalizedProvider,
+      model: attachModelProviderRequestTransport(
+        {
+          id: configuredModel?.id ?? normalizedModelId,
+          name: configuredModel?.name ?? configuredModel?.id ?? normalizedModelId,
+          api: normalizeResolvedTransportApi(requestConfig.api) ?? resolvedApi,
+          provider: normalizedProvider,
+          baseUrl: requestConfig.baseUrl,
+          reasoning: configuredModel?.reasoning ?? false,
+          input: resolveProviderModelInput({
+            provider: normalizedProvider,
+            modelId: configuredModel?.id ?? normalizedModelId,
+            modelName: configuredModel?.name,
+            input: configuredModel?.input,
+          }),
+          cost: configuredModel?.cost ?? {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          },
+          contextWindow:
+            configuredModel?.contextWindow ??
+            providerConfig.models?.[0]?.contextWindow ??
+            DEFAULT_CONTEXT_TOKENS,
+          contextTokens:
+            configuredModel?.contextTokens ?? providerConfig.models?.[0]?.contextTokens,
+          maxTokens:
+            configuredModel?.maxTokens ??
+            providerConfig.models?.[0]?.maxTokens ??
+            DEFAULT_CONTEXT_TOKENS,
+          headers: requestConfig.headers,
+          ...(configuredModel?.compat ? { compat: configuredModel.compat } : {}),
+        } as Model<Api>,
+        providerRequest,
+      ),
+    }),
+  });
+  const { authStorage, modelRegistry } = createEmptyPiDiscoveryStores();
+  return {
+    model,
+    authStorage,
+    modelRegistry,
+  };
 }
 
 export function resolveModel(

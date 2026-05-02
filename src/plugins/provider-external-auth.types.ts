@@ -20,6 +20,7 @@ export type ProviderResolveExternalOAuthProfilesContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   store: AuthProfileStore;
+  providerRefs?: readonly string[];
 };
 
 export type ProviderResolveExternalAuthProfilesContext =

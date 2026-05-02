@@ -36,11 +36,14 @@ type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   readOnly?: boolean;
   syncExternalCli?: boolean;
+  providerRefs?: readonly string[];
 };
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
+  providerRefs?: readonly string[];
+  allowKeychainPrompt?: boolean;
 };
 
 const loadedAuthStoreCache = new Map<
@@ -269,12 +272,20 @@ export function loadAuthProfileStoreForRuntime(
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return overlayExternalAuthProfiles(store, {
+      agentDir,
+      providerRefs: options?.providerRefs,
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+      syncExternalCli: options?.syncExternalCli,
+    });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
     agentDir,
+    providerRefs: options?.providerRefs,
+    allowKeychainPrompt: options?.allowKeychainPrompt,
+    syncExternalCli: options?.syncExternalCli,
   });
 }
 
@@ -297,11 +308,20 @@ export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): 
 
 export function ensureAuthProfileStore(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: {
+    allowKeychainPrompt?: boolean;
+    syncExternalCli?: boolean;
+    providerRefs?: readonly string[];
+  },
 ): AuthProfileStore {
   return overlayExternalAuthProfiles(
     ensureAuthProfileStoreWithoutExternalProfiles(agentDir, options),
-    { agentDir },
+    {
+      agentDir,
+      providerRefs: options?.providerRefs,
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+      syncExternalCli: options?.syncExternalCli,
+    },
   );
 }
 
@@ -391,6 +411,9 @@ export function saveAuthProfileStore(
       profileId,
       credential,
       agentDir,
+      providerRefs: options?.providerRefs,
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+      syncExternalCli: options?.syncExternalCli,
     });
   });
   saveJsonFile(authPath, payload);

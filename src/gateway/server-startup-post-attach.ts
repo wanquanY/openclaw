@@ -63,8 +63,9 @@ async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
-  log: { warn: (msg: string) => void };
+  log: { info?: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
+  const startedAt = Date.now();
   const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
   if (!explicitPrimary) {
@@ -114,20 +115,83 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   const agentDir = resolveOpenClawAgentDir();
   try {
+    params.log.info?.(`startup model warmup started for ${provider}/${model}`);
     await ensureOpenClawModelsJson(params.cfg, agentDir);
     const resolved = resolveModel(provider, model, agentDir, params.cfg, {
       skipProviderRuntimeHooks: true,
     });
-    if (!resolved.model) {
-      const asyncResolved = await resolveModelAsync(provider, model, agentDir, params.cfg);
-      if (!asyncResolved.model) {
-        throw new Error(
-          resolved.error ?? asyncResolved.error ?? `Unknown model: ${provider}/${model}`,
-        );
-      }
+    const asyncResolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
+      retryTransientProviderRuntimeMiss: true,
+    });
+    if (!asyncResolved.model) {
+      throw new Error(
+        resolved.error ?? asyncResolved.error ?? `Unknown model: ${provider}/${model}`,
+      );
     }
+    params.log.info?.(
+      `startup model warmup completed for ${provider}/${model} in ${Date.now() - startedAt}ms`,
+    );
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
+  }
+}
+
+async function prewarmGatewayChatRuntime(params: {
+  cfg: OpenClawConfig;
+  defaultWorkspaceDir: string;
+  log: {
+    info?: (msg: string) => void;
+    warn: (msg: string) => void;
+  };
+}): Promise<void> {
+  const startedAt = Date.now();
+  const measureWarmup = async (name: string, run: () => Promise<void> | void): Promise<void> => {
+    const phaseStartedAt = Date.now();
+    params.log.info?.(`chat runtime warmup ${name} started`);
+    await run();
+    params.log.info?.(`chat runtime warmup ${name} completed in ${Date.now() - phaseStartedAt}ms`);
+  };
+  try {
+    const [
+      { prewarmDispatchReplyRuntime },
+      { ensureContextEnginesInitialized },
+      { resolveContextEngine },
+      { createOpenClawCodingTools },
+      { resolveOpenClawAgentDir },
+    ] = await Promise.all([
+      import("../auto-reply/reply/dispatch-from-config.js"),
+      import("../context-engine/init.js"),
+      import("../context-engine/registry.js"),
+      import("../agents/pi-tools.js"),
+      import("../agents/agent-paths.js"),
+    ]);
+    await Promise.all([
+      measureWarmup("model", () =>
+        prewarmConfiguredPrimaryModel({ cfg: params.cfg, log: params.log }),
+      ),
+      measureWarmup("reply", () =>
+        prewarmDispatchReplyRuntime({
+          cfg: params.cfg,
+          workspaceDir: params.defaultWorkspaceDir,
+        }),
+      ),
+      measureWarmup("context", async () => {
+        ensureContextEnginesInitialized();
+        await resolveContextEngine(params.cfg);
+      }),
+      measureWarmup("tools", () => {
+        createOpenClawCodingTools({
+          agentId: "main",
+          config: params.cfg,
+          agentDir: resolveOpenClawAgentDir(),
+          workspaceDir: params.defaultWorkspaceDir,
+          allowGatewaySubagentBinding: true,
+        });
+      }),
+    ]);
+    params.log.info?.(`chat runtime warmup completed in ${Date.now() - startedAt}ms`);
+  } catch (err) {
+    params.log.warn(`chat runtime warmup failed: ${String(err)}`);
   }
 }
 
@@ -137,7 +201,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
-  log: { warn: (msg: string) => void };
+  log: { info?: (msg: string) => void; warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -258,10 +322,6 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        await prewarmConfiguredPrimaryModel({
-          cfg: params.cfg,
-          log: params.log,
-        });
         await params.startChannels();
       } catch (err) {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
@@ -454,6 +514,14 @@ export async function startGatewayPostAttachRuntime(
     }),
   );
 
+  if (!params.minimalTestGateway) {
+    void prewarmGatewayChatRuntime({
+      cfg: params.gatewayPluginConfigAtStart,
+      defaultWorkspaceDir: params.defaultWorkspaceDir,
+      log: params.log,
+    });
+  }
+
   const stopGatewayUpdateCheckPromise = params.minimalTestGateway
     ? Promise.resolve(() => {})
     : measureStartup(params.startupTrace, "post-attach.update-check", () =>
@@ -556,5 +624,6 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const __testing = {
+  prewarmGatewayChatRuntime,
   prewarmConfiguredPrimaryModel,
 };

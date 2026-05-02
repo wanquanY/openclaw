@@ -5,10 +5,12 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { normalizeComputerUseSessionConfig } from "../../computer-use/types.js";
@@ -83,6 +85,7 @@ import {
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatRecallLatestParams,
   validateChatSendParams,
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
@@ -190,6 +193,47 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "topic",
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
+
+function stableJson(value: unknown): string {
+  if (!value || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function sameSessionComputerUseConfig(a: unknown, b: unknown): boolean {
+  return stableJson(a) === stableJson(b);
+}
+
+function sameComputerUseClientBinding(params: {
+  existing: unknown;
+  next: unknown;
+  enabled: boolean;
+}): boolean {
+  if (!params.enabled) {
+    return !params.existing;
+  }
+  if (!params.next || typeof params.next !== "object") {
+    return !params.existing;
+  }
+  if (!params.existing || typeof params.existing !== "object") {
+    return false;
+  }
+  const existing = params.existing as Record<string, unknown>;
+  const next = params.next as Record<string, unknown>;
+  return (
+    existing.deviceId === next.deviceId &&
+    existing.clientId === next.clientId &&
+    existing.clientMode === next.clientMode
+  );
+}
 
 export function resolveEffectiveChatHistoryMaxChars(
   cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
@@ -797,6 +841,143 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
       ],
     },
   });
+}
+
+type ChatTranscriptEntry = Record<string, unknown> & {
+  type?: string;
+  id?: string;
+  parentId?: string | null;
+  message?: {
+    role?: string;
+    content?: unknown;
+    [key: string]: unknown;
+  };
+};
+
+type ChatRecallLatestResult = {
+  ok: true;
+  sessionKey: string;
+  sessionId: string;
+  messageId?: string;
+  content: string;
+  message: unknown;
+  removedEntries: number;
+  removedMessages: number;
+};
+
+function extractRecallUserText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return stripInboundMetadata(content).trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  const text = content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const text = (block as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("");
+  return stripInboundMetadata(text).trim();
+}
+
+function readTranscriptEntriesForRecall(sessionFile: string): ChatTranscriptEntry[] {
+  const raw = fs.readFileSync(sessionFile, "utf-8");
+  const entries: ChatTranscriptEntry[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    const parsed = JSON.parse(line) as ChatTranscriptEntry;
+    entries.push(parsed);
+  }
+  return entries;
+}
+
+async function writeTranscriptEntriesAtomically(params: {
+  sessionFile: string;
+  entries: ChatTranscriptEntry[];
+}) {
+  const content = `${params.entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+  const tmpFile = `${params.sessionFile}.recall-${process.pid}-${Date.now()}.tmp`;
+  try {
+    await fs.promises.writeFile(tmpFile, content, "utf-8");
+    await fs.promises.rename(tmpFile, params.sessionFile);
+  } catch (err) {
+    await fs.promises.unlink(tmpFile).catch(() => undefined);
+    throw err;
+  }
+}
+
+function recallLatestUserTurnFromTranscript(params: {
+  sessionFile: string;
+  sessionKey: string;
+  sessionId: string;
+}): Promise<ChatRecallLatestResult> {
+  return (async () => {
+    const entries = readTranscriptEntriesForRecall(params.sessionFile);
+    let userIndex = -1;
+    for (let index = entries.length - 1; index >= 0; index--) {
+      const entry = entries[index];
+      if (entry?.type === "message" && entry.message?.role === "user") {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex < 0) {
+      throw new Error("No user message to recall");
+    }
+
+    const recalledEntry = entries[userIndex];
+    const keptEntries = entries.slice(0, userIndex);
+    const removedEntries = entries.length - keptEntries.length;
+    const removedMessages = entries
+      .slice(userIndex)
+      .filter((entry) => entry?.type === "message").length;
+
+    await writeTranscriptEntriesAtomically({
+      sessionFile: params.sessionFile,
+      entries: keptEntries,
+    });
+
+    return {
+      ok: true,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      ...(typeof recalledEntry.id === "string" ? { messageId: recalledEntry.id } : {}),
+      content: extractRecallUserText(recalledEntry.message),
+      message: recalledEntry.message,
+      removedEntries,
+      removedMessages,
+    };
+  })();
+}
+
+async function waitForChatSessionRunsToSettle(params: {
+  context: GatewayRequestContext;
+  sessionKeys: readonly string[];
+  timeoutMs?: number;
+}) {
+  const deadline = Date.now() + (params.timeoutMs ?? 5_000);
+  const keys = new Set(params.sessionKeys.filter(Boolean));
+  while (Date.now() < deadline) {
+    const active = [...params.context.chatAbortControllers.values()].some((entry) =>
+      keys.has(entry.sessionKey),
+    );
+    if (!active) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("Timed out waiting for active chat run to stop");
 }
 
 function truncateChatHistoryText(
@@ -2245,7 +2426,116 @@ export const chatHandlers: GatewayRequestHandlers = {
       runIds: res.aborted ? [runId] : [],
     });
   },
+  "chat.recallLatest": async ({ params, respond, context, client }) => {
+    if (!validateChatRecallLatestParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.recallLatest params: ${formatValidationErrors(validateChatRecallLatestParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const { sessionKey: rawSessionKey } = params as { sessionKey: string };
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const sessionId = entry?.sessionId;
+    if (!sessionId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+      return;
+    }
+
+    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const transcriptPath = resolveTranscriptPath({
+      sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
+      agentId,
+    });
+    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session transcript not found"),
+      );
+      return;
+    }
+
+    const abortRes = abortChatRunsForSessionKeyWithPartials({
+      context,
+      ops: createChatAbortOps(context),
+      sessionKey: rawSessionKey,
+      abortOrigin: "rpc",
+      stopReason: "rpc",
+      requester: resolveChatAbortRequester(client),
+    });
+    if (abortRes.unauthorized) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+      return;
+    }
+    if (sessionKey !== rawSessionKey) {
+      const canonicalAbortRes = abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context),
+        sessionKey,
+        abortOrigin: "rpc",
+        stopReason: "rpc",
+        requester: resolveChatAbortRequester(client),
+      });
+      if (canonicalAbortRes.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      abortRes.runIds.push(...canonicalAbortRes.runIds);
+    }
+
+    let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+    try {
+      await waitForChatSessionRunsToSettle({
+        context,
+        sessionKeys: [rawSessionKey, sessionKey],
+      });
+      sessionLock = await acquireSessionWriteLock({ sessionFile: transcriptPath });
+      const result = await recallLatestUserTurnFromTranscript({
+        sessionFile: transcriptPath,
+        sessionKey,
+        sessionId,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey,
+        operation: "recall",
+        recalledMessageId: result.messageId,
+        removedEntries: result.removedEntries,
+        removedMessages: result.removedMessages,
+        abortedRunIds: abortRes.runIds,
+      });
+      respond(
+        true,
+        {
+          ...result,
+          abortedRunIds: abortRes.runIds,
+        },
+        undefined,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    } finally {
+      await sessionLock?.release();
+    }
+  },
   "chat.send": async ({ params, respond, context, client }) => {
+    const timingStartedAt = Date.now();
+    let timingLastAt = timingStartedAt;
+    const timing: Record<string, number> = {};
+    const markTiming = (name: string) => {
+      const now = Date.now();
+      timing[name] = now - timingLastAt;
+      timingLastAt = now;
+    };
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -2336,6 +2626,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     let { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    markTiming("loadSessionEntryMs");
     const agentId = resolveSessionAgentId({
       sessionKey,
       config: cfg,
@@ -2361,45 +2652,58 @@ export const chatHandlers: GatewayRequestHandlers = {
         client,
         capability: "computer_use",
       });
-      context.logGateway.info(
-        `computer_use chat.send extension session=${sessionKey} enabled=${normalizedComputerUse.enabled} binding=${computerUseBinding ? "yes" : "no"} client=${formatForLog(client?.connect?.client?.id ?? "n/a")}`,
-      );
-      const applied = await updateSessionStore(storePath, async (store) => {
-        const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-          cfg,
-          key: rawSessionKey,
-          store,
+      const existingComputerUseBinding = entry?.clientCapabilityBindings?.computer_use;
+      const needsComputerUsePatch =
+        !sameSessionComputerUseConfig(entry?.computerUse, normalizedComputerUse) ||
+        !sameComputerUseClientBinding({
+          existing: existingComputerUseBinding,
+          next: computerUseBinding,
+          enabled: normalizedComputerUse.enabled,
         });
-        const result = await applySessionsPatchToStore({
-          cfg,
-          store,
-          storeKey: primaryKey,
-          patch: {
+      if (!needsComputerUsePatch) {
+        markTiming("computerUsePatchMs");
+      } else {
+        context.logGateway.info(
+          `computer_use chat.send extension session=${sessionKey} enabled=${normalizedComputerUse.enabled} binding=${computerUseBinding ? "yes" : "no"} client=${formatForLog(client?.connect?.client?.id ?? "n/a")}`,
+        );
+        const applied = await updateSessionStore(storePath, async (store) => {
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+            cfg,
             key: rawSessionKey,
-            computerUse: normalizedComputerUse,
-          },
-          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        });
-        if (result.ok) {
-          const nextEntry = applySessionClientCapabilityBinding({
-            entry: result.entry,
-            capability: "computer_use",
-            binding: computerUseBinding,
-            enabled: normalizedComputerUse.enabled,
+            store,
           });
-          result.entry = nextEntry;
-          store[primaryKey] = nextEntry;
+          const result = await applySessionsPatchToStore({
+            cfg,
+            store,
+            storeKey: primaryKey,
+            patch: {
+              key: rawSessionKey,
+              computerUse: normalizedComputerUse,
+            },
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          });
+          if (result.ok) {
+            const nextEntry = applySessionClientCapabilityBinding({
+              entry: result.entry,
+              capability: "computer_use",
+              binding: computerUseBinding,
+              enabled: normalizedComputerUse.enabled,
+            });
+            result.entry = nextEntry;
+            store[primaryKey] = nextEntry;
+          }
+          return result;
+        });
+        if (!applied.ok) {
+          respond(false, undefined, applied.error);
+          return;
         }
-        return result;
-      });
-      if (!applied.ok) {
-        respond(false, undefined, applied.error);
-        return;
+        markTiming("computerUsePatchMs");
+        entry = applied.entry;
+        context.logGateway.info(
+          `computer_use chat.send applied session=${sessionKey} enabled=${entry.computerUse?.enabled === true} binding=${entry.clientCapabilityBindings?.computer_use ? "yes" : "no"}`,
+        );
       }
-      entry = applied.entry;
-      context.logGateway.info(
-        `computer_use chat.send applied session=${sessionKey} enabled=${entry.computerUse?.enabled === true} binding=${entry.clientCapabilityBindings?.computer_use ? "yes" : "no"}`,
-      );
     }
 
     const sendPolicy = resolveSendPolicy({
@@ -2417,6 +2721,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    markTiming("sendPolicyMs");
 
     if (stopCommand) {
       const res = abortChatRunsForSessionKeyWithPartials({
@@ -2489,6 +2794,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    markTiming("attachmentsMs");
 
     try {
       const abortController = new AbortController();
@@ -2505,7 +2811,38 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         status: "started" as const,
       };
+      context.logGateway.info(
+        `chat.send pre-ack timing ${formatForLog({
+          sessionKey,
+          runId: clientRunId,
+          totalMs: Date.now() - timingStartedAt,
+          ...timing,
+          hasComputerUse: Boolean(normalizedComputerUse),
+          attachmentCount: normalizedAttachments.length,
+        })}`,
+      );
+      const runTimingStartedAt = Date.now();
+      let runTimingLastAt = runTimingStartedAt;
+      const emitRunTiming = (stage: string, data?: Record<string, unknown>) => {
+        const nowMs = Date.now();
+        context.logGateway.info(
+          `chat.send run timing ${formatForLog({
+            sessionKey,
+            runId: clientRunId,
+            stage,
+            elapsedMs: nowMs - runTimingStartedAt,
+            deltaMs: nowMs - runTimingLastAt,
+            ...(data ? { details: data } : {}),
+          })}`,
+        );
+        runTimingLastAt = nowMs;
+      };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+      emitRunTiming("post_ack_start", {
+        preAckTotalMs: runTimingStartedAt - timingStartedAt,
+        attachmentCount: normalizedAttachments.length,
+        hasComputerUse: Boolean(normalizedComputerUse),
+      });
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -2749,6 +3086,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
+      emitRunTiming("dispatch_call_start", {
+        provider: ctx.Provider,
+        surface: ctx.Surface,
+        model: resolveSessionModelRef(cfg, entry, agentId),
+      });
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -2759,6 +3101,16 @@ export const chatHandlers: GatewayRequestHandlers = {
           images: parsedImages.length > 0 ? parsedImages : undefined,
           onReasoningStream: () => {},
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+          onReplyStart: () => {
+            emitRunTiming("reply_start");
+          },
+          onTiming: (event) => {
+            emitRunTiming(event.stage, {
+              sourceElapsedMs: event.elapsedMs,
+              sourceDeltaMs: event.deltaMs,
+              ...(event.data ? { data: event.data } : {}),
+            });
+          },
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             void emitUserTranscriptUpdate();
@@ -2782,7 +3134,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(async () => {
+        .then(async (dispatchResult) => {
+          emitRunTiming("dispatch_call_done", {
+            agentRunStarted,
+            queuedFinal: dispatchResult.queuedFinal,
+            counts: dispatchResult.counts,
+            deliveredReplyCount: deliveredReplies.length,
+          });
           await rewriteUserTranscriptMedia();
           if (!agentRunStarted) {
             await emitUserTranscriptUpdate();
@@ -2952,6 +3310,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
+          emitRunTiming("dispatch_call_error", {
+            error: String(err),
+            agentRunStarted,
+            deliveredReplyCount: deliveredReplies.length,
+          });
           void rewriteUserTranscriptMedia().catch((rewriteErr) => {
             context.logGateway.warn(
               `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
@@ -2985,6 +3348,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
+          emitRunTiming("run_finally", {
+            agentRunStarted,
+            deliveredReplyCount: deliveredReplies.length,
+          });
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {

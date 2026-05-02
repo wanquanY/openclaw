@@ -613,6 +613,10 @@ function shouldProbePrimaryDuringCooldown(params: {
   return params.now >= soonest - PROBE_MARGIN_MS;
 }
 
+function isProviderScopedFailureReason(reason: FailoverReason | null | undefined): boolean {
+  return reason === "auth" || reason === "auth_permanent" || reason === "billing";
+}
+
 /** @internal – exposed for unit tests only */
 export const _probeThrottleInternals = {
   lastProbeAttempt,
@@ -740,6 +744,7 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const providerScopedFailures = new Map<string, FailoverReason>();
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -748,6 +753,32 @@ export async function runWithModelFallback<T>(params: {
     const isPrimary = i === 0;
     const requestedModel =
       params.provider === candidate.provider && params.model === candidate.model;
+    const providerScopedFailure = providerScopedFailures.get(candidate.provider);
+    if (providerScopedFailure) {
+      const error = `Provider ${candidate.provider} has ${providerScopedFailure} issue in this run (skipping remaining models)`;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error,
+        reason: providerScopedFailure,
+      });
+      logModelFallbackDecision({
+        decision: "skip_candidate",
+        runId: params.runId,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: providerScopedFailure,
+        error,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: hasFallbackCandidates,
+      });
+      continue;
+    }
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
@@ -957,6 +988,10 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = isKnownFailover ? normalized : err;
+      const describedFailure = describeFailoverError(normalized);
+      if (isProviderScopedFailureReason(describedFailure.reason)) {
+        providerScopedFailures.set(candidate.provider, describedFailure.reason);
+      }
       recordFailedCandidateAttempt({
         attempts,
         candidate,

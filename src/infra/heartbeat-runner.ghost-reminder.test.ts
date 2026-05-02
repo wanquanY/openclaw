@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -13,10 +14,12 @@ import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
 });
 
 afterEach(() => {
   resetSystemEventsForTest();
+  resetHeartbeatEventsForTest();
   vi.restoreAllMocks();
 });
 
@@ -356,6 +359,32 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("treats internal-only exec HEARTBEAT_OK replies as silent acknowledgments", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-internal-ack-",
+      replyText: "HEARTBEAT_OK",
+      reason: "exec-event",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Exec completed (plaid-ze, code 1) :: failed", {
+          sessionKey,
+          trusted: false,
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("user delivery is disabled");
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(getLastHeartbeatEvent()).toEqual(
+      expect.objectContaining({
+        status: "ok-token",
+        silent: true,
+      }),
+    );
   });
 
   it("includes untrusted exec completion details in user-relay prompts", async () => {

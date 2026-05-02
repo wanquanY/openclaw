@@ -41,7 +41,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   completeMusicGenerationTaskRun,
   createMusicGenerationTaskRun,
@@ -130,10 +134,14 @@ export function resolveMusicGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): ToolModelConfig | null {
+  const explicit = coerceToolModelConfig(params.cfg?.agents?.defaults?.musicGenerationModel);
+  if (hasToolModelConfig(explicit)) {
+    return explicit;
+  }
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
-    modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
+    modelConfig: explicit,
     providers: listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
 }
@@ -492,14 +500,19 @@ export function createMusicGenerateTool(options?: {
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MusicGenerateBackgroundScheduler;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? loadConfig();
-  const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
+  const musicGenerationModelConfig = options?.deferModelConfig
+    ? null
+    : resolveMusicGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
   if (!musicGenerationModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
 
   const sandboxConfig = options?.sandbox
@@ -522,10 +535,11 @@ export function createMusicGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
 
       if (action === "list") {
+        const effectiveCfg = musicGenerationModelConfig
+          ? (applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg)
+          : cfg;
         return createMusicGenerateListActionResult(effectiveCfg);
       }
 
@@ -540,6 +554,19 @@ export function createMusicGenerateTool(options?: {
         return duplicateGuardResult;
       }
 
+      const resolvedMusicGenerationModelConfig =
+        musicGenerationModelConfig ??
+        resolveMusicGenerationModelConfigForTool({
+          cfg,
+          agentDir: options?.agentDir,
+        });
+      if (!resolvedMusicGenerationModelConfig) {
+        throw new ToolInputError(
+          "No music-generation model configured. Set agents.defaults.musicGenerationModel.primary to a provider/model, or configure a music-generation provider first.",
+        );
+      }
+      const effectiveCfg =
+        applyMusicGenerationModelConfigDefaults(cfg, resolvedMusicGenerationModelConfig) ?? cfg;
       const prompt = readStringParam(args, "prompt", { required: true });
       const lyrics = readStringParam(args, "lyrics");
       const instrumental = readBooleanToolParam(args, "instrumental");
@@ -554,7 +581,7 @@ export function createMusicGenerateTool(options?: {
       const imageInputs = normalizeReferenceImageInputs(args);
       const selectedProvider = resolveSelectedMusicGenerationProvider({
         config: effectiveCfg,
-        musicGenerationModelConfig,
+        musicGenerationModelConfig: resolvedMusicGenerationModelConfig,
         modelOverride: model,
       });
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);

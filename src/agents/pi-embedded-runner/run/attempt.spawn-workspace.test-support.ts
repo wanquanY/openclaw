@@ -278,6 +278,7 @@ vi.mock("../context-engine-maintenance.js", () => ({
 }));
 
 vi.mock("../../docs-path.js", () => ({
+  resolveOpenClawDocsPath: async () => undefined,
   resolveOpenClawReferencePaths: async () => ({ docsPath: undefined, sourcePath: undefined }),
 }));
 
@@ -356,9 +357,12 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 }));
 
 vi.mock("../runs.js", () => ({
+  abortEmbeddedPiRun: () => ({ aborted: false }),
   setActiveEmbeddedRun: () => {},
   clearActiveEmbeddedRun: () => {},
   updateActiveEmbeddedRunSnapshot: () => {},
+  getLatestSubagentRunByChildSessionKey: () => undefined,
+  listSubagentRunsForController: () => [],
 }));
 
 vi.mock("./images.js", () => ({

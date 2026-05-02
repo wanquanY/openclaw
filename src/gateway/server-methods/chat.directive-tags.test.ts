@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -189,8 +189,13 @@ vi.mock("../../sessions/transcript-events.js", () => ({
     (update: {
       sessionFile: string;
       sessionKey?: string;
+      operation?: "append" | "recall";
       message?: unknown;
       messageId?: string;
+      recalledMessageId?: string;
+      removedEntries?: number;
+      removedMessages?: number;
+      abortedRunIds?: string[];
     }) => {
       mockState.emittedTranscriptUpdates.push(update);
     },
@@ -1747,6 +1752,91 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
     expect(finalBroadcast).toBeUndefined();
+  });
+
+  it("recalls the latest user turn and removes the assistant/tool suffix from the transcript", async () => {
+    createTranscriptFixture("openclaw-chat-recall-latest-");
+    const session = SessionManager.open(mockState.transcriptPath);
+    session.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first reply" }],
+      timestamp: 2,
+      api: "responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: {},
+    } as never);
+    session.appendMessage({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: 'Conversation info (untrusted metadata):\n```json\n{\n  "message_id": "chat-ui-message-id"\n}\n```\n\nSender (untrusted metadata):\n```json\n{\n  "label": "Video Workflow"\n}\n```\n\n[Sun 2026-04-26 14:29 GMT+8] second',
+        },
+      ],
+      timestamp: 3,
+    } as never);
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: "call-1", toolName: "exec", args: {} }],
+      timestamp: 4,
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "tool_call",
+    } as never);
+    session.appendMessage({
+      role: "tool",
+      toolCallId: "call-1",
+      content: [{ type: "tool-result", toolCallId: "call-1", toolName: "exec", result: "ok" }],
+      timestamp: 5,
+    } as never);
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "second reply" }],
+      timestamp: 6,
+      api: "responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      stopReason: "stop",
+      usage: {},
+    } as never);
+
+    const respond = vi.fn();
+    const context = createChatContext();
+    await chatHandlers["chat.recallLatest"]({
+      params: { sessionKey: "main" },
+      respond,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        content: "second",
+        removedMessages: 4,
+        removedEntries: 4,
+      }),
+      undefined,
+    );
+    const recalledSession = SessionManager.open(mockState.transcriptPath);
+    expect(recalledSession.getBranch().map((entry) => entry.type)).toEqual(["message", "message"]);
+    expect(recalledSession.buildSessionContext().messages.map((msg) => msg.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
+    expect(mockState.emittedTranscriptUpdates.at(-1)).toMatchObject({
+      sessionFile: expect.stringMatching(/sess\.jsonl$/),
+      sessionKey: "main",
+      operation: "recall",
+      removedEntries: 4,
+      removedMessages: 4,
+    });
   });
 
   it("adds persisted media paths to the user transcript update", async () => {

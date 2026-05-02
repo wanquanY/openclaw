@@ -452,6 +452,146 @@ git merge upstream
   - OpenAI WebSocket 会话可以在多轮 observe / act 中稳定携带 observation continuation
 - 如果上游后续改 gateway client 连接模型、session patch、OpenAI WS incremental input 或工具审批逻辑，同步后必须先人工复核这里
 
+### 15. Runtime model fast path、外部认证同步与 provider auth 选择
+
+涉及文件：
+
+- `src/agents/pi-embedded-runner/runtime-model-fastpath.ts`
+- `src/agents/pi-embedded-runner/run.runtime-model-fastpath.test.ts`
+- `src/agents/pi-embedded-runner/model.ts`
+- `src/agents/pi-embedded-runner/model.test.ts`
+- `src/agents/pi-embedded-runner/run.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/model-auth.ts`
+- `src/agents/model-auth-label.ts`
+- `src/agents/model-fallback.ts`
+- `src/agents/model-fallback.test.ts`
+- `src/agents/auth-profiles/external-auth.ts`
+- `src/agents/auth-profiles/external-cli-sync.ts`
+- `src/agents/auth-profiles.external-cli-sync.test.ts`
+- `src/agents/auth-profiles/store.ts`
+- `src/agents/cli-credentials.ts`
+- `src/plugins/provider-external-auth.types.ts`
+- `src/plugins/provider-runtime.ts`
+- `src/plugins/provider-runtime.test.ts`
+- `src/plugins/provider-hook-runtime.ts`
+- `src/plugins/providers.ts`
+- `src/utils/provider-utils.ts`
+- `src/utils/provider-utils.test.ts`
+
+必须确认：
+
+- `video-workflow` 这类 host runtime 原生 provider 仍然走 runtime model fast path，不能被 PI `models.json` catalog 冷启动生成拖慢首轮。
+- `pluginHarnessOwnsTransport` 为 true 时仍然保持已有的 PI discovery skip 路径，不能错误走 runtime fast path。
+- 外部 CLI auth profile 同步仍然能写入、更新、标注和加载 provider-owned 凭据，不能把外部凭据误归类成普通手填 key。
+- model fallback 保留 provider/auth profile 选择语义，不能在 fallback 后丢失 auth source、label 或 provider-owned external auth。
+- provider hook runtime 和 provider registry 仍然把外部认证能力暴露给运行时，不要只更新类型而忘记 runtime 分发。
+
+背景：
+
+- 这是 2026-05-02 为 `video_workflow` 原生 provider 首轮响应和外部 CLI 凭据同步补充的本地能力。
+- 下游当前依赖的是：
+  - 原生 runtime provider 不被 OpenClaw/PI catalog 生成阻塞。
+  - provider-owned external auth 能在配置、fallback、运行时和 UI label 中保持一致。
+  - 模型切换和 fallback 不会静默切到没有凭据的 provider。
+
+### 16. Chat recall、session create/patch 字段与 memory flush 等待语义
+
+涉及文件：
+
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/chat.directive-tags.test.ts`
+- `src/gateway/server-methods/sessions.ts`
+- `src/gateway/server.sessions.gateway-server-sessions-a.test.ts`
+- `src/gateway/sessions-patch.ts`
+- `src/gateway/sessions-patch.test.ts`
+- `src/gateway/sessions-history-http.ts`
+- `src/gateway/protocol/schema/logs-chat.ts`
+- `src/gateway/protocol/schema/sessions.ts`
+- `src/gateway/protocol/schema/protocol-schemas.ts`
+- `src/gateway/protocol/schema/types.ts`
+- `src/gateway/protocol/index.ts`
+- `src/gateway/method-scopes.ts`
+- `src/gateway/server-methods-list.ts`
+- `apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
+- `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
+
+必须确认：
+
+- `chat.recallLatest` 仍然注册在 schema、method list、method scopes 和 protocol index 中，并且只移除最新 user turn 以及其后的 transcript entries。
+- recall 写 transcript 时必须使用 session write lock/原子写入，不能在 active run 未 settle 时截断正在写入的 transcript。
+- `sessions.create` 仍然支持 `reasoningLevel`、`verboseLevel` 和 `computerUse`，生成的 Swift GatewayModels 也必须同步包含这些字段。
+- `sessions.memoryFlush` 的 `wait` 参数仍然存在，调用方可选择等待 memory flush 完成。
+- `sessions.patch` 仍然保留 computer use config 和 client capability binding 的规范化/差异判断，不能把桌面能力绑定误清空。
+- session history HTTP 改动后仍然维持本地历史读取认证和 CORS 语义，不能与 `chat.history` 分叉。
+
+背景：
+
+- 这是 2026-05-02 为下游桌面 chat 编辑/撤回、session 创建参数透传、memory flush 等待和生成协议模型补充的本地协议增强。
+- 这类改动同时影响 gateway RPC、HTTP history、客户端生成模型和桌面 UI；同步上游 schema 时必须成套复核。
+
+### 17. OpenClaw-managed tool 注册、工具创建耗时与媒体工具模型配置
+
+涉及文件：
+
+- `src/agents/tool-create-timing.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-tools.ts`
+- `src/agents/pi-embedded-runner/run/attempt.tool-registration.test.ts`
+- `src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts`
+- `src/agents/tools/model-config.helpers.ts`
+- `src/agents/tools/image-generate-tool.ts`
+- `src/agents/tools/image-generate-tool.test.ts`
+- `src/agents/tools/image-tool.ts`
+- `src/agents/tools/music-generate-tool.ts`
+- `src/agents/tools/music-generate-tool.test.ts`
+- `src/agents/tools/pdf-tool.ts`
+- `src/agents/tools/video-generate-tool.ts`
+- `src/agents/tools/video-generate-tool.test.ts`
+- `src/plugins/tools.ts`
+- `src/plugins/capability-provider-runtime.ts`
+- `src/plugins/capability-provider-runtime.test.ts`
+
+必须确认：
+
+- OpenClaw-managed custom tools 仍然作为 Pi session 的 tool allowlist 传入，不能因为上游 tool catalog 改动导致 `sessions_spawn` 等本地工具未注册。
+- tool create timing 只记录慢路径并保持低开销，不能把日志记录放到每次工具执行热路径。
+- image/music/video/pdf 相关工具仍然能读取 model config helper 和 provider capability runtime，不能退回到硬编码 provider/model。
+- capability provider runtime 仍然能支持插件暴露的媒体能力，不能只保留核心 provider。
+
+背景：
+
+- 这是 2026-05-02 为多媒体工具、session 工具注册和首轮工具创建性能排查补充的本地能力。
+- 下游当前依赖 Pi session 明确知道 OpenClaw-managed tools；否则 agent 可见工具和实际 OpenClaw tool catalog 会分叉。
+
+### 18. Session memory hook、标题 slug 与 transcript event 兼容
+
+涉及文件：
+
+- `src/hooks/bundled/session-memory/handler.ts`
+- `src/hooks/bundled/session-memory/handler.test.ts`
+- `src/hooks/llm-slug-generator.ts`
+- `src/hooks/llm-slug-generator.test.ts`
+- `src/sessions/transcript-events.ts`
+- `src/sessions/transcript-events.test.ts`
+- `src/gateway/server-session-events.ts`
+- `src/gateway/server-startup-post-attach.ts`
+- `src/gateway/server-startup.test.ts`
+- `src/infra/heartbeat-runner.ts`
+- `src/infra/heartbeat-runner.ghost-reminder.test.ts`
+
+必须确认：
+
+- session-memory hook 仍然能处理当前 transcript event 结构，不能因为上游 transcript event schema 调整丢失 memory 写入。
+- LLM slug generator 仍然对标题/会话名生成保持稳定和可回退，不能把非法字符或空结果写入用户可见 session title。
+- `server-session-events` 和 startup post-attach 改动后，订阅事件仍然在 gateway 启动后正确挂载。
+- heartbeat ghost reminder 仍然按当前 session/event 状态触发，不能因为 startup 或 session event refactor 静默失效。
+
+背景：
+
+- 这是 2026-05-02 为 session memory、session title/slug 和 gateway session event 生命周期补充的本地检查点。
+- 这些路径通常不会被单个端到端测试完整覆盖，同步上游时必须至少跑相关单测并人工核查事件字段。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -496,6 +636,10 @@ rg -n "computer_use|client\\.invoke|clientCapabilityBindings|observation continu
 rg -n "SERPER_API_KEY|serperBaseUrl|braveMode|withTrustedWebToolsEndpoint|legacy-bundled-web-search" src/agents src/plugins src/flows
 rg -n "getApiKeyAndHeaders|sourceInfo\\.source|generateSummary\\(" src/agents
 rg -n "skillSettings|managedInstall|installOrigin|skills\\.uninstall|skills\\.import|resolveSkillConfig\\(" src/agents src/config src/gateway src/secrets
+rg -n "video-workflow|shouldResolveRuntimeModelBeforePiCatalog|externalAuth|external-cli" src/agents src/plugins src/utils
+rg -n "chat\\.recallLatest|validateChatRecallLatestParams|wait: Type\\.Optional|reasoningLevel|verboseLevel|computerUse" src/gateway apps/macos apps/shared
+rg -n "recordToolCreateTiming|logToolCreateTiming|customTools|sessions_spawn|capabilityProvider" src/agents src/plugins
+rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks src/sessions src/gateway src/infra
 ```
 
 ### D. 验证范围
@@ -534,7 +678,24 @@ pnpm test -- \
   src/gateway/server-methods/chat.directive-tags.test.ts \
   src/gateway/server-methods/chat.abort-persistence.test.ts \
   src/gateway/server-plugin-approval.e2e.test.ts \
-  src/scripts/canvas-a2ui-copy.test.ts
+  src/scripts/canvas-a2ui-copy.test.ts \
+  src/agents/pi-embedded-runner/run.runtime-model-fastpath.test.ts \
+  src/agents/pi-embedded-runner/run/attempt.tool-registration.test.ts \
+  src/agents/pi-embedded-runner/model.test.ts \
+  src/agents/auth-profiles.external-cli-sync.test.ts \
+  src/agents/model-fallback.test.ts \
+  src/agents/tools/image-generate-tool.test.ts \
+  src/agents/tools/music-generate-tool.test.ts \
+  src/agents/tools/video-generate-tool.test.ts \
+  src/gateway/sessions-patch.test.ts \
+  src/gateway/server-startup.test.ts \
+  src/hooks/bundled/session-memory/handler.test.ts \
+  src/hooks/llm-slug-generator.test.ts \
+  src/infra/heartbeat-runner.ghost-reminder.test.ts \
+  src/plugins/capability-provider-runtime.test.ts \
+  src/plugins/provider-runtime.test.ts \
+  src/sessions/transcript-events.test.ts \
+  src/utils/provider-utils.test.ts
 ```
 
 本地功能保留测试：

@@ -62,6 +62,14 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
 }) {
+  const activeRegistry = getActivePluginRegistry();
+  if (
+    activeRegistry &&
+    (!params.allowGatewaySubagentBinding ||
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable")
+  ) {
+    return activeRegistry;
+  }
   if (
     params.allowGatewaySubagentBinding &&
     getActivePluginRegistryKey() &&

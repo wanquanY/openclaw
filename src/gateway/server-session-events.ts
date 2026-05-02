@@ -89,7 +89,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
 }) {
   return (update: SessionTranscriptUpdate): void => {
     const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
-    if (!sessionKey || update.message === undefined) {
+    if (!sessionKey) {
       return;
     }
     const connIds = new Set<string>();
@@ -110,6 +110,49 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       sessionRow: loadGatewaySessionRow(sessionKey),
       includeSession: true,
     });
+    if (update.operation === "recall") {
+      params.broadcastToConnIds(
+        "session.recall",
+        {
+          sessionKey,
+          ...(typeof update.recalledMessageId === "string"
+            ? { messageId: update.recalledMessageId }
+            : {}),
+          ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+          removedEntries: update.removedEntries ?? 0,
+          removedMessages: update.removedMessages ?? 0,
+          abortedRunIds: update.abortedRunIds ?? [],
+          ...sessionSnapshot,
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+
+      const sessionEventConnIds = params.sessionEventSubscribers.getAll();
+      if (sessionEventConnIds.size > 0) {
+        params.broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey,
+            phase: "recall",
+            ts: Date.now(),
+            ...(typeof update.recalledMessageId === "string"
+              ? { messageId: update.recalledMessageId }
+              : {}),
+            ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+            removedEntries: update.removedEntries ?? 0,
+            removedMessages: update.removedMessages ?? 0,
+            ...sessionSnapshot,
+          },
+          sessionEventConnIds,
+          { dropIfSlow: true },
+        );
+      }
+      return;
+    }
+    if (update.message === undefined) {
+      return;
+    }
     const message = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),

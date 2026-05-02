@@ -3,6 +3,7 @@ import {
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
+import { normalizeProviderId } from "../provider-id.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
@@ -37,13 +38,19 @@ export type ExternalCliResolvedProfile = {
 type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
-  readCredentials: () => OAuthCredential | null;
+  providerRefs: readonly string[];
+  readCredentials: (options?: ExternalCliAuthProfileResolutionOptions) => OAuthCredential | null;
   // bootstrapOnly providers adopt the external CLI credential only to
   // seed an empty slot; once a local OAuth credential exists for the
   // profile, the local refresh token is treated as canonical and the
   // CLI state must not replace or shadow it. Codex requires this to
   // avoid clobbering a locally refreshed token with stale CLI state.
   bootstrapOnly?: boolean;
+};
+
+export type ExternalCliAuthProfileResolutionOptions = {
+  providerRefs?: readonly string[];
+  allowKeychainPrompt?: boolean;
 };
 
 function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
@@ -90,14 +97,23 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     provider: "openai-codex",
-    readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    providerRefs: ["openai-codex", "codex-cli"],
+    readCredentials: (options) =>
+      readCodexCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      }),
     bootstrapOnly: true,
   },
   {
     profileId: CLAUDE_CLI_PROFILE_ID,
     provider: "claude-cli",
-    readCredentials: () => {
-      const credential = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+    providerRefs: ["anthropic", "claude-cli"],
+    readCredentials: (options) => {
+      const credential = readClaudeCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+      });
       if (credential?.type !== "oauth") {
         return null;
       }
@@ -107,9 +123,41 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
+    providerRefs: ["minimax-portal", "minimax"],
     readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
   },
 ];
+
+function providerRefSet(providerRefs: readonly string[] | undefined): Set<string> | undefined {
+  if (!providerRefs) {
+    return undefined;
+  }
+  const normalized = new Set<string>();
+  for (const providerRef of providerRefs) {
+    const provider = normalizeProviderId(providerRef);
+    if (provider) {
+      normalized.add(provider);
+    }
+  }
+  return normalized;
+}
+
+function shouldReadExternalCliProvider(
+  providerConfig: ExternalCliSyncProvider,
+  refs: Set<string> | undefined,
+): boolean {
+  if (!refs) {
+    return true;
+  }
+  if (refs.size === 0) {
+    return false;
+  }
+  const profileProvider = providerConfig.profileId.split(":", 1)[0] ?? "";
+  const candidates = [providerConfig.provider, profileProvider, ...providerConfig.providerRefs].map(
+    (value) => normalizeProviderId(value),
+  );
+  return candidates.some((candidate) => candidate && refs.has(candidate));
+}
 
 function resolveExternalCliSyncProvider(params: {
   profileId: string;
@@ -149,11 +197,16 @@ export const readManagedExternalCliCredential = readExternalCliBootstrapCredenti
 
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
+  options?: ExternalCliAuthProfileResolutionOptions,
 ): ExternalCliResolvedProfile[] {
   const profiles: ExternalCliResolvedProfile[] = [];
   const now = Date.now();
+  const refs = providerRefSet(options?.providerRefs);
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
-    const creds = providerConfig.readCredentials();
+    if (!shouldReadExternalCliProvider(providerConfig, refs)) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials(options);
     if (!creds) {
       continue;
     }

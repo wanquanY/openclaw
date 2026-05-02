@@ -636,6 +636,27 @@ export async function runAgentTurnWithFallback(params: {
   );
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const timingStartedAt = Date.now();
+  let timingLastAt = timingStartedAt;
+  const emitTiming = (stage: string, data?: Record<string, unknown>) => {
+    if (!params.opts?.onTiming) {
+      return;
+    }
+    const now = Date.now();
+    params.opts.onTiming({
+      stage: `agent_execution.${stage}`,
+      elapsedMs: now - timingStartedAt,
+      deltaMs: now - timingLastAt,
+      ...(data ? { data } : {}),
+    });
+    timingLastAt = now;
+  };
+  emitTiming("start", {
+    runId,
+    provider: effectiveRun.provider,
+    model: effectiveRun.model,
+    sessionKey: params.sessionKey,
+  });
   const replyMediaContext =
     params.replyMediaContext ??
     createReplyMediaContext({
@@ -701,6 +722,8 @@ export async function runAgentTurnWithFallback(params: {
     });
   }
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let didEmitFirstAgentEventTiming = false;
+  let didEmitFirstPartialReplyTiming = false;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
@@ -934,6 +957,11 @@ export async function runAgentTurnWithFallback(params: {
             model,
             thinkLevel: params.followupRun.run.thinkLevel,
           });
+          emitTiming("model_selected", {
+            provider,
+            model,
+            thinkLevel: params.followupRun.run.thinkLevel,
+          });
           let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
           try {
             rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
@@ -993,6 +1021,10 @@ export async function runAgentTurnWithFallback(params: {
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
+                emitTiming("cli_call_start", {
+                  provider: cliExecutionProvider,
+                  model,
+                });
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
@@ -1028,6 +1060,9 @@ export async function runAgentTurnWithFallback(params: {
                   senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
+                });
+                emitTiming("cli_call_done", {
+                  payloadCount: result.payloads?.length ?? 0,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
@@ -1112,6 +1147,10 @@ export async function runAgentTurnWithFallback(params: {
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              emitTiming("embedded_call_start", {
+                provider,
+                model,
+              });
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
@@ -1152,6 +1191,13 @@ export async function runAgentTurnWithFallback(params: {
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 onPartialReply: async (payload) => {
+                  if (!didEmitFirstPartialReplyTiming) {
+                    didEmitFirstPartialReplyTiming = true;
+                    emitTiming("first_partial_reply", {
+                      textChars: payload.text?.length ?? 0,
+                      hasMedia: Boolean(payload.mediaUrls?.length),
+                    });
+                  }
                   const textForTyping = await handlePartialForTyping(payload);
                   if (!params.opts?.onPartialReply || textForTyping === undefined) {
                     return;
@@ -1180,6 +1226,14 @@ export async function runAgentTurnWithFallback(params: {
                     : undefined,
                 onReasoningEnd: params.opts?.onReasoningEnd,
                 onAgentEvent: async (evt) => {
+                  if (!didEmitFirstAgentEventTiming) {
+                    didEmitFirstAgentEventTiming = true;
+                    emitTiming("first_agent_event", {
+                      stream: evt.stream,
+                      phase:
+                        evt.data && typeof evt.data.phase === "string" ? evt.data.phase : undefined,
+                    });
+                  }
                   if (evt.stream.startsWith("codex_app_server.")) {
                     emitAgentEvent({
                       runId,
@@ -1372,6 +1426,10 @@ export async function runAgentTurnWithFallback(params: {
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
+              emitTiming("embedded_call_done", {
+                payloadCount: result.payloads?.length ?? 0,
+                compactionCount: result.meta?.agentMeta?.compactionCount ?? 0,
+              });
               const resultCompactionCount = Math.max(
                 0,
                 result.meta?.agentMeta?.compactionCount ?? 0,
@@ -1409,6 +1467,11 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code || undefined,
           }))
         : [];
+      emitTiming("fallback_loop_done", {
+        provider: fallbackProvider,
+        model: fallbackModel,
+        attemptCount: fallbackAttempts.length,
+      });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.

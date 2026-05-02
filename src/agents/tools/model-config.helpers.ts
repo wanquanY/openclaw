@@ -47,6 +47,7 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
   }
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
+    providerRefs: [params.provider],
   });
   return listProfilesForProvider(store, params.provider).length > 0;
 }

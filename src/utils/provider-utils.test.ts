@@ -23,12 +23,21 @@ describe("resolveReasoningOutputMode", () => {
   });
 
   it.each([["google-generative-ai", "tagged"]] as const)(
-    "falls back to the built-in map for %s",
+    "uses the built-in map for %s",
     (provider, expected) => {
       expect(resolveReasoningOutputMode({ provider, workspaceDir: process.cwd() })).toBe(expected);
-      expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
+      expect(resolveProviderReasoningOutputModeWithPluginMock).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps video-workflow on the native reasoning path without plugin discovery", () => {
+    resolveProviderReasoningOutputModeWithPluginMock.mockReturnValue("tagged");
+
+    expect(
+      resolveReasoningOutputMode({ provider: "video-workflow", workspaceDir: process.cwd() }),
+    ).toBe("native");
+    expect(resolveProviderReasoningOutputModeWithPluginMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["google", "tagged"],

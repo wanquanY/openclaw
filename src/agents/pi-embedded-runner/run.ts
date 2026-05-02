@@ -86,7 +86,7 @@ import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-cont
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { resolveModelAsync } from "./model.js";
+import { resolveModelAsync, resolveStaticConfiguredModel } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
@@ -131,6 +131,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import { shouldResolveRuntimeModelBeforePiCatalog } from "./runtime-model-fastpath.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -283,10 +284,13 @@ export async function runEmbeddedPiAgent(
 
   throwIfAborted();
 
+  const queuedAt = Date.now();
   return enqueueSession(() => {
     throwIfAborted();
+    const sessionDequeuedAt = Date.now();
     return enqueueGlobal(async () => {
       throwIfAborted();
+      const globalDequeuedAt = Date.now();
       const started = Date.now();
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
@@ -307,11 +311,13 @@ export async function runEmbeddedPiAgent(
           `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
+      const runtimePluginsStartedAt = Date.now();
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      const runtimePluginsMs = Date.now() - runtimePluginsStartedAt;
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -358,6 +364,7 @@ export async function runEmbeddedPiAgent(
         }
       }
 
+      const hookSelectionStartedAt = Date.now();
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
         attachments: buildBeforeModelResolveAttachments(params.images),
@@ -366,6 +373,7 @@ export async function runEmbeddedPiAgent(
         hookRunner,
         hookContext: hookCtx,
       });
+      const hookSelectionMs = Date.now() - hookSelectionStartedAt;
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
@@ -378,20 +386,82 @@ export async function runEmbeddedPiAgent(
         agentHarnessId: params.agentHarnessId,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
-      if (!pluginHarnessOwnsTransport) {
-        await ensureOpenClawModelsJson(params.config, agentDir);
+      let modelConfigMs = 0;
+      let modelConfigMode:
+        | "models_json"
+        | "plugin_harness_skip"
+        | "runtime_provider"
+        | "runtime_provider_static"
+        | "runtime_provider_fallback" = pluginHarnessOwnsTransport
+        ? "plugin_harness_skip"
+        : "models_json";
+      let modelResolveMs = 0;
+      let resolvedModel: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
+      if (
+        shouldResolveRuntimeModelBeforePiCatalog({
+          provider,
+          pluginHarnessOwnsTransport,
+        })
+      ) {
+        const runtimeModelResolveStartedAt = Date.now();
+        try {
+          const staticResolvedModel = resolveStaticConfiguredModel(
+            provider,
+            modelId,
+            agentDir,
+            params.config,
+          );
+          if (staticResolvedModel.model) {
+            resolvedModel = staticResolvedModel;
+            modelConfigMode = "runtime_provider_static";
+          } else {
+            resolvedModel = await resolveModelAsync(provider, modelId, agentDir, params.config, {
+              retryTransientProviderRuntimeMiss: true,
+              skipProviderRuntimeHooks: true,
+              skipPiDiscovery: true,
+            });
+          }
+        } catch (error) {
+          if (log.isEnabled("debug")) {
+            log.debug(
+              `[embedded-runtime-model-fastpath] failed provider=${sanitizeForLog(provider)} ` +
+                `model=${sanitizeForLog(modelId)} error=${sanitizeForLog(formatErrorMessage(error))}`,
+            );
+          }
+        } finally {
+          modelResolveMs += Date.now() - runtimeModelResolveStartedAt;
+        }
+        if (resolvedModel?.model) {
+          if (modelConfigMode !== "runtime_provider_static") {
+            modelConfigMode = "runtime_provider";
+          }
+        } else {
+          resolvedModel = undefined;
+          modelConfigMode = "runtime_provider_fallback";
+        }
       }
 
-      const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
-        provider,
-        modelId,
-        agentDir,
-        params.config,
-        // Plugin harnesses may expose synthetic providers that PI cannot
-        // discover safely; resolve their model metadata without touching PI
-        // auth/model stores.
-        { skipPiDiscovery: pluginHarnessOwnsTransport },
-      );
+      if (!pluginHarnessOwnsTransport && !resolvedModel) {
+        const modelConfigStartedAt = Date.now();
+        await ensureOpenClawModelsJson(params.config, agentDir);
+        modelConfigMs = Date.now() - modelConfigStartedAt;
+      }
+
+      if (!resolvedModel) {
+        const modelResolveStartedAt = Date.now();
+        resolvedModel = await resolveModelAsync(
+          provider,
+          modelId,
+          agentDir,
+          params.config,
+          // Plugin harnesses may expose synthetic providers that PI cannot
+          // discover safely; resolve their model metadata without touching PI
+          // auth/model stores.
+          { skipPiDiscovery: pluginHarnessOwnsTransport },
+        );
+        modelResolveMs += Date.now() - modelResolveStartedAt;
+      }
+      const { model, error, authStorage, modelRegistry } = resolvedModel;
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -401,22 +471,28 @@ export async function runEmbeddedPiAgent(
       }
       let runtimeModel = model;
 
+      const effectiveRuntimeModelStartedAt = Date.now();
       const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
         cfg: params.config,
         provider,
         modelId,
         runtimeModel,
       });
+      const effectiveRuntimeModelMs = Date.now() - effectiveRuntimeModelStartedAt;
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
 
+      const authStoreStartedAt = Date.now();
       const authStore = pluginHarnessOwnsTransport
         ? createEmptyAuthProfileStore()
         : ensureAuthProfileStore(agentDir, {
             allowKeychainPrompt: false,
+            providerRefs: [provider],
           });
+      const authStoreMs = Date.now() - authStoreStartedAt;
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      const lockedProfileValidationStartedAt = Date.now();
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
           const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
@@ -458,6 +534,8 @@ export async function runEmbeddedPiAgent(
           throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
         }
       }
+      const lockedProfileValidationMs = Date.now() - lockedProfileValidationStartedAt;
+      const authProfileOrderStartedAt = Date.now();
       const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
         ? []
         : resolveAuthProfileOrder({
@@ -466,9 +544,14 @@ export async function runEmbeddedPiAgent(
             provider,
             preferredProfile: preferredProfileId,
           });
-      const providerPreferredProfileId = lockedProfileId
-        ? undefined
-        : resolveProviderAuthProfileId({
+      const authProfileOrderMs = Date.now() - authProfileOrderStartedAt;
+      const providerAuthProfileStartedAt = Date.now();
+      // Provider auth-profile hooks can only reorder profile ids that core
+      // already resolved into profileOrder. Avoid provider hook discovery when
+      // there are no candidates for the hook to choose from.
+      const shouldResolveProviderPreferredProfile = !lockedProfileId && profileOrder.length > 0;
+      const providerPreferredProfileId = shouldResolveProviderPreferredProfile
+        ? resolveProviderAuthProfileId({
             provider,
             config: params.config,
             workspaceDir: resolvedWorkspace,
@@ -483,7 +566,9 @@ export async function runEmbeddedPiAgent(
               profileOrder,
               authStore,
             },
-          });
+          })
+        : undefined;
+      const providerAuthProfileMs = Date.now() - providerAuthProfileStartedAt;
       const providerOrderedProfiles =
         providerPreferredProfileId && profileOrder.includes(providerPreferredProfileId)
           ? [
@@ -506,6 +591,7 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
+      const authControllerStartedAt = Date.now();
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -558,15 +644,19 @@ export async function runEmbeddedPiAgent(
         },
         log,
       });
+      const authControllerMs = Date.now() - authControllerStartedAt;
 
       // Plugin harnesses own their model transport/auth. Running PI's generic
       // auth bootstrap here can turn synthetic provider markers into real
       // vendor-token refresh attempts before the plugin gets control.
+      const authInitStartedAt = Date.now();
       if (!pluginHarnessOwnsTransport) {
         await initializeAuthProfile();
       } else if (lockedProfileId) {
         lastProfileId = lockedProfileId;
       }
+      const authInitMs = Date.now() - authInitStartedAt;
+      const executionPolicyStartedAt = Date.now();
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -624,6 +714,7 @@ export async function runEmbeddedPiAgent(
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
+      const executionPolicyMs = Date.now() - executionPolicyStartedAt;
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
         failoverModel: string;
@@ -695,8 +786,43 @@ export async function runEmbeddedPiAgent(
       };
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
+      const contextEngineStartedAt = Date.now();
       ensureContextEnginesInitialized();
       const contextEngine = await resolveContextEngine(params.config);
+      const contextEngineMs = Date.now() - contextEngineStartedAt;
+      if (!isProbeSession) {
+        const preAttemptMs = Date.now() - started;
+        const accountedPreAttemptMs =
+          runtimePluginsMs +
+          hookSelectionMs +
+          modelConfigMs +
+          modelResolveMs +
+          effectiveRuntimeModelMs +
+          authStoreMs +
+          lockedProfileValidationMs +
+          authProfileOrderMs +
+          providerAuthProfileMs +
+          authControllerMs +
+          authInitMs +
+          executionPolicyMs +
+          contextEngineMs;
+        const unattributedPreAttemptMs = Math.max(0, preAttemptMs - accountedPreAttemptMs);
+        log.info(
+          `[embedded-run-preattempt-timing] runId=${params.runId} sessionKey=${redactedSessionKey} ` +
+            `trigger=${params.trigger ?? "unknown"} provider=${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} ` +
+            `harness=${agentHarness.id} sessionQueueMs=${sessionDequeuedAt - queuedAt} ` +
+            `globalQueueMs=${globalDequeuedAt - sessionDequeuedAt} preAttemptMs=${preAttemptMs} ` +
+            `runtimePluginsMs=${runtimePluginsMs} hookSelectionMs=${hookSelectionMs} ` +
+            `modelConfigMs=${modelConfigMs} modelConfigMode=${modelConfigMode} ` +
+            `modelResolveMs=${modelResolveMs} effectiveRuntimeModelMs=${effectiveRuntimeModelMs} ` +
+            `authStoreMs=${authStoreMs} lockedProfileValidationMs=${lockedProfileValidationMs} ` +
+            `authProfileOrderMs=${authProfileOrderMs} authProfileCandidateCount=${profileOrder.length} ` +
+            `providerAuthProfileMs=${providerAuthProfileMs} ` +
+            `authControllerMs=${authControllerMs} authInitMs=${authInitMs} ` +
+            `executionPolicyMs=${executionPolicyMs} contextEngineMs=${contextEngineMs} ` +
+            `unattributedPreAttemptMs=${unattributedPreAttemptMs}`,
+        );
+      }
       try {
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify

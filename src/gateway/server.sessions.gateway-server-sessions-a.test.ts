@@ -473,6 +473,22 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        reasoningLevel?: string;
+        verboseLevel?: string;
+        computerUse?: {
+          enabled?: boolean;
+          mode?: string;
+          scope?: {
+            type?: string;
+          };
+          hostPolicy?: string;
+          modelPolicy?: {
+            mode?: string;
+          };
+          approvals?: {
+            highRiskActionsRequireConfirm?: boolean;
+          };
+        };
         sessionFile?: string;
       };
     }>("sessions.create", {
@@ -480,6 +496,16 @@ describe("gateway server sessions", () => {
       label: "Dashboard Chat",
       model: "openai/gpt-test-a",
       parentSessionKey: "main",
+      reasoningLevel: "stream",
+      verboseLevel: "full",
+      computerUse: {
+        enabled: true,
+        mode: "observe_only",
+        scope: { type: "current_window" },
+        hostPolicy: "local_only",
+        modelPolicy: { mode: "follow_user_model" },
+        approvals: { highRiskActionsRequireConfirm: true },
+      },
     });
 
     expect(created.ok).toBe(true);
@@ -488,6 +514,16 @@ describe("gateway server sessions", () => {
     expect(created.payload?.entry?.providerOverride).toBe("openai");
     expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    expect(created.payload?.entry?.reasoningLevel).toBe("stream");
+    expect(created.payload?.entry?.verboseLevel).toBe("full");
+    expect(created.payload?.entry?.computerUse).toMatchObject({
+      enabled: true,
+      mode: "observe_only",
+      scope: { type: "current_window" },
+      hostPolicy: "local_only",
+      modelPolicy: { mode: "follow_user_model" },
+      approvals: { highRiskActionsRequireConfirm: true },
+    });
     expect(created.payload?.entry?.sessionFile).toBeTruthy();
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -501,6 +537,22 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        reasoningLevel?: string;
+        verboseLevel?: string;
+        computerUse?: {
+          enabled?: boolean;
+          mode?: string;
+          scope?: {
+            type?: string;
+          };
+          hostPolicy?: string;
+          modelPolicy?: {
+            mode?: string;
+          };
+          approvals?: {
+            highRiskActionsRequireConfirm?: boolean;
+          };
+        };
         sessionFile?: string;
       }
     >;
@@ -511,6 +563,16 @@ describe("gateway server sessions", () => {
       providerOverride: "openai",
       modelOverride: "gpt-test-a",
       parentSessionKey: "agent:main:main",
+      reasoningLevel: "stream",
+      verboseLevel: "full",
+      computerUse: {
+        enabled: true,
+        mode: "observe_only",
+        scope: { type: "current_window" },
+        hostPolicy: "local_only",
+        modelPolicy: { mode: "follow_user_model" },
+        approvals: { highRiskActionsRequireConfirm: true },
+      },
     });
     expect(created.payload?.entry?.sessionFile).toBe(rawStore[key]?.sessionFile);
 

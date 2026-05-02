@@ -914,6 +914,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
+    const computerUseBinding =
+      p.computerUse && typeof p.computerUse === "object" && !Array.isArray(p.computerUse)
+        ? buildSessionClientCapabilityBindingFromClient({
+            client,
+            capability: "computer_use",
+          })
+        : undefined;
     const created = await updateSessionStore(target.storePath, async (store) => {
       const patched = await applySessionsPatchToStore({
         cfg,
@@ -926,9 +933,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           threadId: normalizeOptionalString(p.threadId),
           title: normalizeOptionalString(p.title),
           titleLocked: typeof p.titleLocked === "boolean" ? p.titleLocked : undefined,
+          reasoningLevel: normalizeOptionalString(p.reasoningLevel),
+          verboseLevel: normalizeOptionalString(p.verboseLevel),
+          computerUse:
+            p.computerUse && typeof p.computerUse === "object" && !Array.isArray(p.computerUse)
+              ? p.computerUse
+              : undefined,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (
+        patched.ok &&
+        p.computerUse &&
+        typeof p.computerUse === "object" &&
+        !Array.isArray(p.computerUse)
+      ) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: patched.entry,
+          capability: "computer_use",
+          binding: computerUseBinding,
+          enabled: patched.entry.computerUse?.enabled === true,
+        });
+        patched.entry = nextEntry;
+        store[target.canonicalKey] = nextEntry;
+      }
       if (!patched.ok || !canonicalParentSessionKey) {
         return patched;
       }
@@ -1436,7 +1464,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.memory.flush": async ({ params, respond }) => {
+  "sessions.memory.flush": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -1466,9 +1494,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       previousSessionEntry: entry,
       commandSource: "gateway:sessions.memory.flush",
       throwOnError: true,
+      skipLlmSlug: p.wait === false,
     };
 
-    try {
+    const runFlush = async () => {
       const hookEvent = createInternalHookEvent(
         "command",
         "new",
@@ -1476,9 +1505,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         eventContext,
       );
       await saveSessionToMemory(hookEvent);
-      const details = hookEvent.context.sessionMemoryResult as
+      return hookEvent.context.sessionMemoryResult as
         | { path?: string; filename?: string }
         | undefined;
+    };
+
+    if (p.wait === false) {
+      const resolvedKey = target.canonicalKey ?? key;
+      void runFlush().catch((error) => {
+        context.logGateway.warn(
+          `background session memory flush failed for ${resolvedKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      respond(
+        true,
+        {
+          ok: true,
+          key: resolvedKey,
+          status: "queued",
+        },
+        undefined,
+      );
+      return;
+    }
+
+    try {
+      const details = await runFlush();
       respond(
         true,
         {

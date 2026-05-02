@@ -143,6 +143,7 @@ const BASE_METHODS = [
   "events.subscribe",
   "events.unsubscribe",
   "chat.abort",
+  "chat.recallLatest",
   "chat.send",
 ];
 

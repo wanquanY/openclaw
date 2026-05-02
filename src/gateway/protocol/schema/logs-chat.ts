@@ -69,6 +69,13 @@ export const ChatAbortParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChatRecallLatestParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const ChatInjectParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,

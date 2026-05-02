@@ -148,7 +148,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const skipLlmSlug = context.skipLlmSlug === true;
+      const allowLlmSlug = !skipLlmSlug && !isTestEnv && hookConfig?.llmSlug !== false;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");

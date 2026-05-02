@@ -42,7 +42,12 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
+import {
+  buildInlineProviderModels,
+  resolveModel,
+  resolveModelAsync,
+  resolveStaticConfiguredModel,
+} from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -760,6 +765,84 @@ describe("resolveModel", () => {
       reasoning: true,
       contextWindow: 198000,
       maxTokens: 16000,
+    });
+  });
+
+  it("resolves native video-workflow models from explicit config without PI discovery", async () => {
+    vi.mocked(discoverModels).mockClear();
+    const cfg = {
+      models: {
+        providers: {
+          "video-workflow": {
+            baseUrl: "http://127.0.0.1:18993/api/llm-proxy/v1",
+            apiKey: "jwt-test",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_050_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("video-workflow", "gpt-5.4", "/tmp/agent", cfg, {
+      skipPiDiscovery: true,
+      skipProviderRuntimeHooks: true,
+    });
+
+    expect(discoverModels).not.toHaveBeenCalled();
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "video-workflow",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18993/api/llm-proxy/v1",
+      reasoning: true,
+      contextWindow: 1_050_000,
+      maxTokens: 64_000,
+    });
+  });
+
+  it("resolves native video-workflow models synchronously from explicit config", () => {
+    vi.mocked(discoverModels).mockClear();
+    const cfg = {
+      models: {
+        providers: {
+          "video-workflow": {
+            baseUrl: "http://127.0.0.1:18993/api/llm-proxy/v1",
+            apiKey: "jwt-test",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("gpt-5.4"),
+                api: "openai-completions",
+                reasoning: true,
+                contextWindow: 1_050_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveStaticConfiguredModel("video-workflow", "gpt-5.4", "/tmp/agent", cfg);
+
+    expect(discoverModels).not.toHaveBeenCalled();
+    expect(result.model).toMatchObject({
+      provider: "video-workflow",
+      id: "gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18993/api/llm-proxy/v1",
+      reasoning: true,
+      contextWindow: 1_050_000,
+      maxTokens: 64_000,
     });
   });
 

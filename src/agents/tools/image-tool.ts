@@ -292,6 +292,7 @@ export function createImageTool(options?: {
   fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
@@ -301,12 +302,16 @@ export function createImageTool(options?: {
     }
     return null;
   }
-  const imageModelConfig = resolveImageModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-  });
+  const imageModelConfig = options?.deferModelConfig
+    ? null
+    : resolveImageModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+      });
   if (!imageModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
@@ -383,6 +388,17 @@ export function createImageTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const resolvedImageModelConfig =
+        imageModelConfig ??
+        resolveImageModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+        });
+      if (!resolvedImageModelConfig) {
+        throw new Error(
+          "No image model configured. Set agents.defaults.imageModel.primary to a vision-capable provider/model, or configure a vision provider first.",
+        );
+      }
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
@@ -517,7 +533,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
-        imageModelConfig,
+        imageModelConfig: resolvedImageModelConfig,
         modelOverride,
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),

@@ -92,6 +92,24 @@ function recordHasProviderSurface(plugin: PluginRegistryRecord): boolean {
   return plugin.contributions.providers.length > 0;
 }
 
+function pluginMatchesProviderRefs(
+  plugin: PluginRegistryRecord,
+  providerRefs: readonly string[] | undefined,
+): boolean {
+  if (!providerRefs) {
+    return true;
+  }
+  const normalizedRefs = new Set(
+    providerRefs.map((providerRef) => normalizeProviderId(providerRef)).filter(Boolean),
+  );
+  if (normalizedRefs.size === 0) {
+    return false;
+  }
+  return plugin.contributions.providers.some((provider) =>
+    normalizedRefs.has(normalizeProviderId(provider)),
+  );
+}
+
 function resolveEffectiveRegistryPluginActivation(params: {
   plugin: PluginRegistryRecord;
   normalizedConfig: NormalizedPluginsConfig;
@@ -163,6 +181,7 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  providerRefs?: readonly string[];
 }): string[] {
   return resolveRegistryManifestContractPluginIds({
     ...params,
@@ -177,6 +196,7 @@ function resolveRegistryManifestContractPluginIds(params: {
   env?: PluginLoadOptions["env"];
   origin?: PluginRegistryRecord["origin"];
   onlyPluginIds?: readonly string[];
+  providerRefs?: readonly string[];
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   return listRegistryPluginIds(registry, (plugin) => {
@@ -184,6 +204,9 @@ function resolveRegistryManifestContractPluginIds(params: {
       return false;
     }
     if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.pluginId)) {
+      return false;
+    }
+    if (!pluginMatchesProviderRefs(plugin, params.providerRefs)) {
       return false;
     }
     return plugin.contributions.contracts.includes(params.contract);
@@ -194,6 +217,7 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  providerRefs?: readonly string[];
   declaredPluginIds?: ReadonlySet<string>;
 }): string[] {
   // Deprecated compatibility fallback for provider plugins that still implement
@@ -208,6 +232,7 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
     (plugin) =>
       plugin.origin !== "bundled" &&
       recordHasProviderSurface(plugin) &&
+      pluginMatchesProviderRefs(plugin, params.providerRefs) &&
       !declaredPluginIds.has(plugin.pluginId) &&
       isProviderPluginEligibleForRuntimeOwnerActivation({
         plugin,

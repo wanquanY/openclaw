@@ -11,6 +11,14 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 
+export type ExternalAuthProfileOverlayOptions = {
+  agentDir?: string;
+  env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
+  allowKeychainPrompt?: boolean;
+  syncExternalCli?: boolean;
+};
+
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
 export const __testing = {
@@ -34,27 +42,35 @@ function normalizeExternalAuthProfile(
   };
 }
 
-function resolveExternalAuthProfileMap(params: {
-  store: AuthProfileStore;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ExternalAuthProfileMap {
+function resolveExternalAuthProfileMap(
+  params: {
+    store: AuthProfileStore;
+  } & ExternalAuthProfileOverlayOptions,
+): ExternalAuthProfileMap {
   const env = params.env ?? process.env;
   const resolveProfiles =
     resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
   const profiles = resolveProfiles({
     env,
+    providerRefs: params.providerRefs,
     context: {
       config: undefined,
       agentDir: params.agentDir,
       workspaceDir: undefined,
       env,
       store: params.store,
+      providerRefs: params.providerRefs,
     },
   });
 
   const resolved: ExternalAuthProfileMap = new Map();
-  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles?.(params.store) ?? [];
+  const cliProfiles =
+    params.syncExternalCli === false
+      ? []
+      : (externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
+          providerRefs: params.providerRefs,
+          allowKeychainPrompt: params.allowKeychainPrompt,
+        }) ?? []);
   for (const profile of cliProfiles) {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
@@ -72,43 +88,52 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
-  store: AuthProfileStore;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): RuntimeExternalOAuthProfile[] {
+function listRuntimeExternalAuthProfiles(
+  params: {
+    store: AuthProfileStore;
+  } & ExternalAuthProfileOverlayOptions,
+): RuntimeExternalOAuthProfile[] {
   return Array.from(
     resolveExternalAuthProfileMap({
       store: params.store,
       agentDir: params.agentDir,
       env: params.env,
+      providerRefs: params.providerRefs,
+      allowKeychainPrompt: params.allowKeychainPrompt,
+      syncExternalCli: params.syncExternalCli,
     }).values(),
   );
 }
 
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv },
+  params?: ExternalAuthProfileOverlayOptions,
 ): AuthProfileStore {
   const profiles = listRuntimeExternalAuthProfiles({
     store,
     agentDir: params?.agentDir,
     env: params?.env,
+    providerRefs: params?.providerRefs,
+    allowKeychainPrompt: params?.allowKeychainPrompt,
+    syncExternalCli: params?.syncExternalCli,
   });
   return overlayRuntimeExternalOAuthProfiles(store, profiles);
 }
 
-export function shouldPersistExternalAuthProfile(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function shouldPersistExternalAuthProfile(
+  params: {
+    store: AuthProfileStore;
+    profileId: string;
+    credential: OAuthCredential;
+  } & ExternalAuthProfileOverlayOptions,
+): boolean {
   const profiles = listRuntimeExternalAuthProfiles({
     store: params.store,
     agentDir: params.agentDir,
     env: params.env,
+    providerRefs: params.providerRefs,
+    allowKeychainPrompt: params.allowKeychainPrompt,
+    syncExternalCli: params.syncExternalCli,
   });
   return shouldPersistRuntimeExternalOAuthProfile({
     profileId: params.profileId,

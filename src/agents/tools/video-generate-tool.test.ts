@@ -96,6 +96,25 @@ describe("createVideoGenerateTool", () => {
     expect(createVideoGenerateTool({ config: asConfig({}) })).toBeNull();
   });
 
+  it("can defer video-generation provider resolution until execution", async () => {
+    const listSpy = vi
+      .spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders")
+      .mockReturnValue([]);
+    listSpy.mockClear();
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({}),
+      deferModelConfig: true,
+    });
+
+    expect(tool).not.toBeNull();
+    expect(listSpy).not.toHaveBeenCalled();
+    await expect(tool!.execute("call-deferred", { prompt: "animate" })).rejects.toThrow(
+      "No video-generation model configured",
+    );
+    expect(listSpy).toHaveBeenCalled();
+  });
+
   it("registers when video-generation config is present", () => {
     expect(
       createVideoGenerateTool({

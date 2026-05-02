@@ -247,6 +247,7 @@ export function createPdfTool(options?: {
   workspaceDir?: string;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
@@ -257,9 +258,13 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
+  const pdfModelConfig = options?.deferModelConfig
+    ? null
+    : resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
   if (!pdfModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
 
   const maxBytesMbDefault = (
@@ -308,6 +313,13 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const resolvedPdfModelConfig =
+        pdfModelConfig ?? resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
+      if (!resolvedPdfModelConfig) {
+        throw new Error(
+          "No PDF model configured. Set agents.defaults.pdfModel.primary or agents.defaults.imageModel.primary to a document-capable provider/model, or configure a vision provider first.",
+        );
+      }
       const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
         typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
@@ -445,7 +457,7 @@ export function createPdfTool(options?: {
       const result = await runPdfPrompt({
         cfg: options?.config,
         agentDir,
-        pdfModelConfig,
+        pdfModelConfig: resolvedPdfModelConfig,
         modelOverride,
         prompt: promptRaw,
         pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),

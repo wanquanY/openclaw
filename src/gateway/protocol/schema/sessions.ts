@@ -95,6 +95,9 @@ export const SessionsCreateParamsSchema = Type.Object(
     threadId: Type.Optional(NonEmptyString),
     title: Type.Optional(Type.String()),
     titleLocked: Type.Optional(Type.Boolean()),
+    reasoningLevel: Type.Optional(NonEmptyString),
+    verboseLevel: Type.Optional(NonEmptyString),
+    computerUse: Type.Optional(ComputerUseSessionConfigSchema),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -215,6 +218,7 @@ export const SessionsResetParamsSchema = Type.Object(
 export const SessionsMemoryFlushParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    wait: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

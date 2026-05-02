@@ -693,6 +693,41 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("skips remaining same-provider models after an auth failure in the same run", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "video-workflow/gpt-5.4",
+            fallbacks: ["video-workflow/claude-sonnet-4-6-thinking", "anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      if (provider === "video-workflow" && model === "gpt-5.4") {
+        throw Object.assign(new Error("401 status code (no body)"), { status: 401 });
+      }
+      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "video-workflow",
+      model: "gpt-5.4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["video-workflow", "gpt-5.4"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
   it("falls back directly to configured primary when an override model fails", async () => {
     const cfg = makeCfg({
       agents: {
@@ -1133,9 +1168,15 @@ describe("runWithModelFallback", () => {
         },
       },
     });
-    const run = vi
-      .fn()
-      .mockImplementation(() => Promise.reject(Object.assign(new Error("nope"), { status: 401 })));
+    const run = vi.fn().mockImplementation((provider: string, model: string) =>
+      Promise.reject(
+        new FailoverError("overloaded", {
+          reason: "overloaded",
+          provider,
+          model,
+        }),
+      ),
+    );
 
     await expect(
       runWithModelFallback({

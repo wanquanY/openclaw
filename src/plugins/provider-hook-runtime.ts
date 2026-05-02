@@ -4,6 +4,7 @@ import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.j
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type {
   ProviderPlugin,
   ProviderExtraParamsForTransportContext,
@@ -25,6 +26,22 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
     (alias) => normalizeProviderId(alias) === normalized,
   );
+}
+
+function resolveActiveProviderPlugin(params: {
+  provider: string;
+  workspaceDir?: string;
+}): ProviderPlugin | undefined {
+  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  if (params.workspaceDir && activeWorkspaceDir && params.workspaceDir !== activeWorkspaceDir) {
+    return undefined;
+  }
+  if (params.workspaceDir && !activeWorkspaceDir) {
+    return undefined;
+  }
+  return getActivePluginRegistry()
+    ?.providers.map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }))
+    .find((candidate) => matchesProviderId(candidate, params.provider));
 }
 
 let cachedHookProvidersWithoutConfig = new WeakMap<
@@ -66,7 +83,8 @@ function buildHookProviderCacheKey(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   onlyPluginIds?: string[];
-  providerRefs?: string[];
+  providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
   env?: NodeJS.ProcessEnv;
 }) {
   const { roots } = resolvePluginCacheInputs({
@@ -74,7 +92,7 @@ function buildHookProviderCacheKey(params: {
     env: params.env,
   });
   const onlyPluginIds = normalizePluginIdScope(params.onlyPluginIds);
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${serializePluginIdScope(onlyPluginIds)}::${JSON.stringify(params.providerRefs ?? [])}`;
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${serializePluginIdScope(onlyPluginIds)}::${JSON.stringify(params.providerRefs ?? [])}::${JSON.stringify(params.modelRefs ?? [])}`;
 }
 
 export function clearProviderRuntimeHookCache(): void {
@@ -101,7 +119,8 @@ export function resolveProviderPluginsForHooks(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
-  providerRefs?: string[];
+  providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -114,6 +133,7 @@ export function resolveProviderPluginsForHooks(params: {
     workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     providerRefs: params.providerRefs,
+    modelRefs: params.modelRefs,
     env,
   });
   const cached = cacheBucket.get(cacheKey);
@@ -152,6 +172,13 @@ export function resolveProviderRuntimePlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
+  const activeProvider = resolveActiveProviderPlugin({
+    provider: params.provider,
+    workspaceDir: params.workspaceDir,
+  });
+  if (activeProvider) {
+    return activeProvider;
+  }
   return resolveProviderPluginsForHooks({
     config: params.config,
     workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
@@ -160,20 +187,49 @@ export function resolveProviderRuntimePlugin(params: {
   }).find((plugin) => matchesProviderId(plugin, params.provider));
 }
 
+function dedupeProviderPlugins(plugins: Array<ProviderPlugin | undefined>): ProviderPlugin[] {
+  const seen = new Set<string>();
+  const deduped: ProviderPlugin[] = [];
+  for (const plugin of plugins) {
+    if (!plugin) {
+      continue;
+    }
+    const key = `${plugin.pluginId ?? ""}:${plugin.id}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(plugin);
+  }
+  return deduped;
+}
+
+export function resolveProviderScopedHookPlugins(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  const activeProvider = resolveActiveProviderPlugin({
+    provider: params.provider,
+    workspaceDir: params.workspaceDir,
+  });
+  const runtimeProviders = resolveProviderPluginsForHooks({
+    config: params.config,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env,
+    providerRefs: [params.provider],
+  }).filter((plugin) => matchesProviderId(plugin, params.provider));
+  return dedupeProviderPlugins([activeProvider, ...runtimeProviders]);
+}
+
 export function resolveProviderHookPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return (
-    resolveProviderRuntimePlugin(params) ??
-    resolveProviderPluginsForHooks({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).find((candidate) => matchesProviderId(candidate, params.provider))
-  );
+  return resolveProviderScopedHookPlugins(params)[0];
 }
 
 export function prepareProviderExtraParams(params: {

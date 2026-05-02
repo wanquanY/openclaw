@@ -22,6 +22,7 @@ import {
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
+  resolveProviderScopedHookPlugins,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
@@ -96,6 +97,7 @@ export {
   resolveProviderFollowupFallbackRoute,
   resetProviderRuntimeHookCacheForTest,
   resolveProviderRuntimePlugin,
+  resolveProviderScopedHookPlugins,
   wrapProviderStreamFn,
 };
 
@@ -261,14 +263,19 @@ function resolveProviderCompatHookPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  modelRefs?: readonly string[];
 }): ProviderPlugin[] {
-  const candidates = resolveProviderPluginsForHooks(params);
-  const owner = resolveProviderRuntimePlugin(params);
-  if (!owner) {
-    return candidates;
-  }
-
-  const ordered = [owner, ...candidates];
+  const scoped = resolveProviderScopedHookPlugins(params);
+  const modelScoped =
+    params.modelRefs && params.modelRefs.length > 0
+      ? resolveProviderPluginsForHooks({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          modelRefs: params.modelRefs,
+        })
+      : [];
+  const ordered = [...scoped, ...modelScoped];
   const seen = new Set<string>();
   return ordered.filter((candidate) => {
     const key = `${candidate.pluginId ?? ""}:${candidate.id}`;
@@ -310,7 +317,10 @@ export function applyProviderResolvedModelCompatWithPlugins(params: {
   let nextModel = params.context.model;
   let changed = false;
 
-  for (const plugin of resolveProviderCompatHookPlugins(params)) {
+  for (const plugin of resolveProviderCompatHookPlugins({
+    ...params,
+    modelRefs: [params.context.modelId],
+  })) {
     const patch = plugin.contributeResolvedModelCompat?.({
       ...params.context,
       model: nextModel,
@@ -336,16 +346,19 @@ export function applyProviderResolvedTransportWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeResolvedModelContext;
 }): ProviderRuntimeModel | undefined {
-  const normalized = normalizeProviderTransportWithPlugin({
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
+  const normalized = normalizeProviderTransportWithHookPlugins({
     context: {
       provider: params.context.provider,
       api: params.context.model.api,
       baseUrl: params.context.model.baseUrl,
     },
+    plugins: resolveProviderCompatHookPlugins({
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      modelRefs: [params.context.modelId],
+    }),
   });
   if (!normalized) {
     return undefined;
@@ -382,17 +395,21 @@ export function normalizeProviderTransportWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderNormalizeTransportContext;
 }): { api?: string | null; baseUrl?: string } | undefined {
+  return normalizeProviderTransportWithHookPlugins({
+    context: params.context,
+    plugins: resolveProviderScopedHookPlugins(params),
+  });
+}
+
+function normalizeProviderTransportWithHookPlugins(params: {
+  context: ProviderNormalizeTransportContext;
+  plugins: readonly ProviderPlugin[];
+}): { api?: string | null; baseUrl?: string } | undefined {
   const hasTransportChange = (normalized: { api?: string | null; baseUrl?: string }) =>
     (normalized.api ?? params.context.api) !== params.context.api ||
     (normalized.baseUrl ?? params.context.baseUrl) !== params.context.baseUrl;
-  const matchedPlugin = resolveProviderHookPlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
-  if (normalizedMatched && hasTransportChange(normalizedMatched)) {
-    return normalizedMatched;
-  }
-
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
+  for (const candidate of params.plugins) {
+    if (!candidate.normalizeTransport) {
       continue;
     }
     const normalized = candidate.normalizeTransport(params.context);
@@ -418,14 +435,8 @@ export function normalizeProviderConfigWithPlugin(params: {
     const normalized = bundledSurface.normalizeConfig(params.context);
     return normalized && hasConfigChange(normalized) ? normalized : undefined;
   }
-  const matchedPlugin = resolveProviderHookPlugin(params);
-  const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
-  if (normalizedMatched && hasConfigChange(normalizedMatched)) {
-    return normalizedMatched;
-  }
-
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
-    if (!candidate.normalizeConfig || candidate === matchedPlugin) {
+  for (const candidate of resolveProviderScopedHookPlugins(params)) {
+    if (!candidate.normalizeConfig) {
       continue;
     }
     const normalized = candidate.normalizeConfig(params.context);
@@ -794,6 +805,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
   context: ProviderResolveExternalAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -802,12 +814,14 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     config: params.config,
     workspaceDir,
     env,
+    providerRefs: params.providerRefs,
   });
   const declaredPluginIds = new Set(externalAuthPluginIds);
   const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    providerRefs: params.providerRefs,
     declaredPluginIds,
   });
   const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
@@ -848,6 +862,7 @@ export function resolveExternalOAuthProfilesWithPlugins(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
   context: ProviderResolveExternalOAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
   return resolveExternalAuthProfilesWithPlugins(params);

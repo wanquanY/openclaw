@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  buildConfiguredModelCatalog,
+  type ModelRef,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -93,6 +95,25 @@ function normalizeOptionalTrimmedString(raw: unknown): string | undefined {
   }
   const trimmed = raw.trim();
   return trimmed || undefined;
+}
+
+function applyResolvedModelOverride(params: {
+  entry: SessionEntry;
+  resolved: ModelRef;
+  resolvedDefault: ModelRef;
+}) {
+  const isDefault =
+    params.resolved.provider === params.resolvedDefault.provider &&
+    params.resolved.model === params.resolvedDefault.model;
+  applyModelOverrideToSessionEntry({
+    entry: params.entry,
+    selection: {
+      provider: params.resolved.provider,
+      model: params.resolved.model,
+      isDefault,
+    },
+    markLiveSwitchPending: true,
+  });
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -527,35 +548,46 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
-        };
-      }
-      const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
+      const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+      const configuredResolved = resolveAllowedModelRef({
         cfg,
-        catalog,
+        catalog: configuredCatalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
-      if ("error" in resolved) {
-        return invalid(resolved.error);
+      if (!params.loadGatewayModelCatalog) {
+        if ("error" in configuredResolved) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          };
+        }
+        applyResolvedModelOverride({
+          entry: next,
+          resolved: configuredResolved.ref,
+          resolvedDefault,
+        });
+      } else {
+        const resolved =
+          "error" in configuredResolved
+            ? resolveAllowedModelRef({
+                cfg,
+                catalog: await params.loadGatewayModelCatalog(),
+                raw: trimmed,
+                defaultProvider: resolvedDefault.provider,
+                defaultModel: subagentModelHint ?? resolvedDefault.model,
+              })
+            : configuredResolved;
+        if ("error" in resolved) {
+          return invalid(resolved.error);
+        }
+        applyResolvedModelOverride({
+          entry: next,
+          resolved: resolved.ref,
+          resolvedDefault,
+        });
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
-        },
-        markLiveSwitchPending: true,
-      });
     }
   }
 

@@ -58,4 +58,32 @@ describe("generateSlugViaLLM", () => {
       }),
     );
   });
+
+  it("uses the session-memory llmSlug model when configured", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": {
+                llmSlug: {
+                  enabled: true,
+                  model: "minimax/MiniMax-M2.7",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "minimax",
+        model: "MiniMax-M2.7",
+      }),
+    );
+  });
 });

@@ -44,7 +44,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -224,10 +228,14 @@ export function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): ToolModelConfig | null {
+  const explicit = coerceToolModelConfig(params.cfg?.agents?.defaults?.videoGenerationModel);
+  if (hasToolModelConfig(explicit)) {
+    return explicit;
+  }
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
     agentDir: params.agentDir,
-    modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
+    modelConfig: explicit,
     providers: listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
@@ -798,14 +806,19 @@ export function createVideoGenerateTool(options?: {
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? loadConfig();
-  const videoGenerationModelConfig = resolveVideoGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
+  const videoGenerationModelConfig = options?.deferModelConfig
+    ? null
+    : resolveVideoGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
   if (!videoGenerationModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
 
   const sandboxConfig = options?.sandbox
@@ -828,11 +841,11 @@ export function createVideoGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg;
-      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
 
       if (action === "list") {
+        const effectiveCfg = videoGenerationModelConfig
+          ? (applyVideoGenerationModelConfigDefaults(cfg, videoGenerationModelConfig) ?? cfg)
+          : cfg;
         return createVideoGenerateListActionResult(effectiveCfg);
       }
 
@@ -847,6 +860,20 @@ export function createVideoGenerateTool(options?: {
         return duplicateGuardResult;
       }
 
+      const resolvedVideoGenerationModelConfig =
+        videoGenerationModelConfig ??
+        resolveVideoGenerationModelConfigForTool({
+          cfg,
+          agentDir: options?.agentDir,
+        });
+      if (!resolvedVideoGenerationModelConfig) {
+        throw new ToolInputError(
+          "No video-generation model configured. Set agents.defaults.videoGenerationModel.primary to a provider/model, or configure a video-generation provider first.",
+        );
+      }
+      const effectiveCfg =
+        applyVideoGenerationModelConfigDefaults(cfg, resolvedVideoGenerationModelConfig) ?? cfg;
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const prompt = readStringParam(args, "prompt", { required: true });
       const model = readStringParam(args, "model");
       const filename = readStringParam(args, "filename");
@@ -913,7 +940,7 @@ export function createVideoGenerateTool(options?: {
 
       const selectedProvider = resolveSelectedVideoGenerationProvider({
         config: effectiveCfg,
-        videoGenerationModelConfig,
+        videoGenerationModelConfig: resolvedVideoGenerationModelConfig,
         modelOverride: model,
       });
       const loadedReferenceImages = await loadReferenceAssets({

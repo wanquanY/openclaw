@@ -4,7 +4,6 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -238,8 +237,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   if (
     activeProviders.length > 0 &&
     params.key !== "memoryEmbeddingProviders" &&
-    params.key !== "speechProviders" &&
-    !hasExplicitPluginConfig(params.cfg?.plugins)
+    params.key !== "speechProviders"
   ) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }

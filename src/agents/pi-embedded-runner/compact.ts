@@ -559,6 +559,7 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       config: params.config,
       abortSignal: runAbortController.signal,
+      deferMediaToolModelConfig: true,
       modelProvider: model.provider,
       modelId,
       modelCompat: extractModelCompat(effectiveModel),

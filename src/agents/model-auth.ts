@@ -424,7 +424,10 @@ export async function resolveApiKeyForProvider(params: {
   const { provider, cfg, profileId, preferredProfile } = params;
 
   if (profileId) {
-    const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+    const profileProviderRef = profileId.split(":", 1)[0] ?? provider;
+    const store =
+      params.store ??
+      ensureAuthProfileStore(params.agentDir, { providerRefs: [provider, profileProviderRef] });
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -494,7 +497,8 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const providerConfig = resolveProviderConfig(cfg, provider);
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ?? ensureAuthProfileStore(params.agentDir, { providerRefs: [provider] });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -621,7 +625,7 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const authStore = store ?? ensureAuthProfileStore();
+  const authStore = store ?? ensureAuthProfileStore(undefined, { providerRefs: [resolved] });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
     const modes = new Set(
@@ -695,7 +699,8 @@ export async function hasAvailableAuthForProvider(params: {
     return true;
   }
 
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ?? ensureAuthProfileStore(params.agentDir, { providerRefs: [provider] });
   const order = resolveAuthProfileOrder({
     cfg,
     store,

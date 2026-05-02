@@ -28,6 +28,7 @@ export function resolveModelAuthLabel(params: {
       ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
       : ensureAuthProfileStore(params.agentDir, {
           allowKeychainPrompt: false,
+          providerRefs: [providerKey],
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({
