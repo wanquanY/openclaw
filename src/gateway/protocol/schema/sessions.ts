@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import { BrowserUseSessionConfigSchema } from "../../../browser-use/schema.js";
 import { ComputerUseSessionConfigSchema } from "../../../computer-use/schema.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -98,6 +99,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     reasoningLevel: Type.Optional(NonEmptyString),
     verboseLevel: Type.Optional(NonEmptyString),
     computerUse: Type.Optional(ComputerUseSessionConfigSchema),
+    browserUse: Type.Optional(BrowserUseSessionConfigSchema),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -187,6 +189,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     computerUse: Type.Optional(Type.Union([ComputerUseSessionConfigSchema, Type.Null()])),
+    browserUse: Type.Optional(Type.Union([BrowserUseSessionConfigSchema, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

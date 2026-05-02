@@ -1,5 +1,6 @@
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
+import type { BrowserUseSessionConfig } from "../../../browser-use/types.js";
 import type { ComputerUseSessionConfig } from "../../../computer-use/types.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -79,6 +80,7 @@ export type FollowupRun = {
     elevatedLevel?: ElevatedLevel;
     execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
     computerUse?: ComputerUseSessionConfig;
+    browserUse?: BrowserUseSessionConfig;
     bashElevated?: {
       enabled: boolean;
       allowed: boolean;

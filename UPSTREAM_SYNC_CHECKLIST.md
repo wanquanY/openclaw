@@ -592,6 +592,55 @@ git merge upstream
 - 这是 2026-05-02 为 session memory、session title/slug 和 gateway session event 生命周期补充的本地检查点。
 - 这些路径通常不会被单个端到端测试完整覆盖，同步上游时必须至少跑相关单测并人工核查事件字段。
 
+### 19. Browser Use 工具、session 配置与桌面浏览器能力绑定
+
+涉及文件：
+
+- `src/browser-use/types.ts`
+- `src/browser-use/schema.ts`
+- `src/agents/tools/browser-use-tool.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-tools.ts`
+- `src/agents/tool-catalog.ts`
+- `src/agents/command/attempt-execution.ts`
+- `src/agents/pi-embedded-runner/run.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/run/params.ts`
+- `src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts`
+- `src/auto-reply/reply/agent-runner-utils.ts`
+- `src/auto-reply/reply/commands-system-prompt.ts`
+- `src/auto-reply/reply/followup-runner.ts`
+- `src/auto-reply/reply/get-reply-run.ts`
+- `src/auto-reply/reply/queue/types.ts`
+- `src/config/sessions/types.ts`
+- `src/gateway/protocol/schema/logs-chat.ts`
+- `src/gateway/protocol/schema/sessions.ts`
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/sessions.ts`
+- `src/gateway/session-utils.ts`
+- `src/gateway/session-utils.types.ts`
+- `src/gateway/sessions-patch.ts`
+
+必须确认：
+
+- `browser_use` 工具仍然通过 gateway `client.invoke` 调用桌面端 Browser Use host，不能退回成服务端直接执行浏览器自动化。
+- `BrowserUseSessionConfig` 仍然在 session entry、`RunEmbeddedPiAgentParams`、chat send extension、`sessions.create` 和 `sessions.patch` 中端到端透传。
+- `chat.send.extensions.browserUse` 和 `sessions.patch.browserUse` 仍然会写入 session 的 `browserUse` 配置，并在本地客户端有能力时写入 `clientCapabilityBindings.browser_use`。
+- `browser_use` 工具只在 session 配置启用时注册到 OpenClaw tool catalog / Pi tools，不能默认暴露给所有会话。
+- `browser_use` structured result 必须保持 `browser_use/v1`，并区分 `status/sessions/navigate/observe/click/double_click/type/scroll/wait/close` 动作。
+- element 操作必须要求 `ref` 或 `selector`，`type` 必须要求 `text`，不能把不完整动作透传给桌面 host。
+- `activation: required` 仍然能改变工具描述中的使用指令，保障用户显式选择 Browser Use 后 agent 优先使用该工具。
+- `followup`、queue 和 command execution 路径必须继续传递 `browserUse`，不能只覆盖普通 chat send 首轮。
+
+背景：
+
+- 这是 2026-05-02 为桌面端 Browser Use 集成补充的本地协议增强。
+- 下游当前依赖的是：
+  - gateway 只做能力路由和 session 绑定，不直接拥有浏览器执行环境。
+  - 桌面端 Browser Use host 通过 `client.invoke` 暴露浏览器状态、DOM observation 和动作执行。
+  - agent session 通过 `browserUse` 配置和 `clientCapabilityBindings.browser_use` 定向调用当前桌面客户端。
+- 如果上游后续改 tool catalog、session patch sanitizer、chat send extensions 或 client capability binding，同步后必须先人工复核这里。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -640,6 +689,7 @@ rg -n "video-workflow|shouldResolveRuntimeModelBeforePiCatalog|externalAuth|exte
 rg -n "chat\\.recallLatest|validateChatRecallLatestParams|wait: Type\\.Optional|reasoningLevel|verboseLevel|computerUse" src/gateway apps/macos apps/shared
 rg -n "recordToolCreateTiming|logToolCreateTiming|customTools|sessions_spawn|capabilityProvider" src/agents src/plugins
 rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks src/sessions src/gateway src/infra
+rg -n "browser_use|BrowserUseSessionConfig|browserUse|clientCapabilityBindings\\.browser_use|browser.action|browser.observe" src/browser-use src/agents src/auto-reply src/config src/gateway
 ```
 
 ### D. 验证范围

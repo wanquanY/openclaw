@@ -668,6 +668,7 @@ export async function runPreparedReply(
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const preparedComputerUse = preparedSessionState.sessionEntry?.computerUse;
+  const preparedBrowserUse = preparedSessionState.sessionEntry?.browserUse;
   emitTiming("computer_use_state_ready", {
     enabled: preparedComputerUse?.enabled === true,
     scope: preparedComputerUse?.scope?.type,
@@ -753,6 +754,7 @@ export async function runPreparedReply(
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       computerUse: preparedComputerUse,
+      browserUse: preparedBrowserUse,
       bashElevated: {
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,

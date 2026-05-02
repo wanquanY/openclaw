@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { BrowserUseSessionConfig } from "../../../browser-use/types.js";
 import type { ComputerUseSessionConfig } from "../../../computer-use/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -100,6 +101,7 @@ export type RunEmbeddedPiAgentParams = {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   computerUse?: ComputerUseSessionConfig;
+  browserUse?: BrowserUseSessionConfig;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean;
   /** Bootstrap context mode for workspace file injection. */

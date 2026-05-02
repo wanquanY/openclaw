@@ -1,3 +1,4 @@
+import type { BrowserUseSessionConfig } from "../browser-use/types.js";
 import type { ComputerUseSessionConfig } from "../computer-use/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -18,6 +19,7 @@ import type { SpawnedToolContext } from "./spawned-context.js";
 import { logToolCreateTiming, recordToolCreateTiming } from "./tool-create-timing.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createBrowserUseTool } from "./tools/browser-use-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerUseTool } from "./tools/computer-use-tool.js";
@@ -89,6 +91,7 @@ export function createOpenClawTools(
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
     computerUse?: ComputerUseSessionConfig;
+    browserUse?: BrowserUseSessionConfig;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -278,12 +281,25 @@ export function createOpenClawTools(
   defaultRuntime.log?.(
     `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
   );
+  logVerbose(
+    `browser_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.browserUse?.enabled === true} hostPolicy=${options?.browserUse?.hostPolicy ?? "n/a"}`,
+  );
   const tools: AnyAgentTool[] = recordToolCreateTiming(timings, "coreToolsArrayMs", () => [
     createCanvasTool({ config: options?.config }),
     ...(options?.computerUse?.enabled
       ? [
           createComputerUseTool({
             sessionConfig: options.computerUse,
+            sessionKey: options?.agentSessionKey,
+            agentId: sessionAgentId,
+            config: options?.config,
+          }),
+        ]
+      : []),
+    ...(options?.browserUse?.enabled
+      ? [
+          createBrowserUseTool({
+            sessionConfig: options.browserUse,
             sessionKey: options?.agentSessionKey,
             agentId: sessionAgentId,
             config: options?.config,

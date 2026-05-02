@@ -921,6 +921,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             capability: "computer_use",
           })
         : undefined;
+    const browserUseBinding =
+      p.browserUse && typeof p.browserUse === "object" && !Array.isArray(p.browserUse)
+        ? buildSessionClientCapabilityBindingFromClient({
+            client,
+            capability: "browser_use",
+          })
+        : undefined;
     const created = await updateSessionStore(target.storePath, async (store) => {
       const patched = await applySessionsPatchToStore({
         cfg,
@@ -939,6 +946,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             p.computerUse && typeof p.computerUse === "object" && !Array.isArray(p.computerUse)
               ? p.computerUse
               : undefined,
+          browserUse:
+            p.browserUse && typeof p.browserUse === "object" && !Array.isArray(p.browserUse)
+              ? p.browserUse
+              : undefined,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
@@ -953,6 +964,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           capability: "computer_use",
           binding: computerUseBinding,
           enabled: patched.entry.computerUse?.enabled === true,
+        });
+        patched.entry = nextEntry;
+        store[target.canonicalKey] = nextEntry;
+      }
+      if (
+        patched.ok &&
+        p.browserUse &&
+        typeof p.browserUse === "object" &&
+        !Array.isArray(p.browserUse)
+      ) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: patched.entry,
+          capability: "browser_use",
+          binding: browserUseBinding,
+          enabled: patched.entry.browserUse?.enabled === true,
         });
         patched.entry = nextEntry;
         store[target.canonicalKey] = nextEntry;
@@ -1402,6 +1428,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           capability: "computer_use",
         })
       : undefined;
+    const browserUseBinding = Object.prototype.hasOwnProperty.call(p, "browserUse")
+      ? buildSessionClientCapabilityBindingFromClient({
+          client,
+          capability: "browser_use",
+        })
+      : undefined;
     const applied = await updateSessionStore(storePath, async (store) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
       const result = await applySessionsPatchToStore({
@@ -1417,6 +1449,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           capability: "computer_use",
           binding: computerUseBinding,
           enabled: result.entry.computerUse?.enabled === true,
+        });
+        result.entry = nextEntry;
+        store[primaryKey] = nextEntry;
+      }
+      if (result.ok && Object.prototype.hasOwnProperty.call(p, "browserUse")) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: result.entry,
+          capability: "browser_use",
+          binding: browserUseBinding,
+          enabled: result.entry.browserUse?.enabled === true,
         });
         result.entry = nextEntry;
         store[primaryKey] = nextEntry;

@@ -1464,6 +1464,7 @@ export function buildGatewaySessionRow(params: {
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
     computerUse: entry?.computerUse,
+    browserUse: entry?.browserUse,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,

@@ -225,6 +225,7 @@ export function buildEmbeddedRunBaseParams(params: {
     reasoningLevel: params.run.reasoningLevel,
     execOverrides: params.run.execOverrides,
     computerUse: params.run.computerUse,
+    browserUse: params.run.browserUse,
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
     runId: params.runId,

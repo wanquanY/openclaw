@@ -19,6 +19,7 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
+import { normalizeBrowserUseSessionConfig } from "../browser-use/types.js";
 import { normalizeComputerUseSessionConfig } from "../computer-use/types.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -528,6 +529,19 @@ export async function applySessionsPatchToStore(params: {
         return invalid("invalid computerUse config");
       }
       next.computerUse = normalized;
+    }
+  }
+
+  if ("browserUse" in patch) {
+    const raw = patch.browserUse;
+    if (raw === null) {
+      delete next.browserUse;
+    } else if (raw !== undefined) {
+      const normalized = normalizeBrowserUseSessionConfig(raw);
+      if (!normalized) {
+        return invalid("invalid browserUse config");
+      }
+      next.browserUse = normalized;
     }
   }
 

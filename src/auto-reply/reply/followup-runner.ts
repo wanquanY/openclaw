@@ -326,6 +326,7 @@ export function createFollowupRunner(params: {
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
                 execOverrides: run.execOverrides,
                 computerUse: run.computerUse,
+                browserUse: run.browserUse,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,

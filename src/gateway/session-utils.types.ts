@@ -68,6 +68,7 @@ export type GatewaySessionRow = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   computerUse?: SessionEntry["computerUse"];
+  browserUse?: SessionEntry["browserUse"];
   sendPolicy?: "allow" | "deny";
   inputTokens?: number;
   outputTokens?: number;

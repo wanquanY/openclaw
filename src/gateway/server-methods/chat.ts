@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { normalizeBrowserUseSessionConfig } from "../../browser-use/types.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { normalizeComputerUseSessionConfig } from "../../computer-use/types.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
@@ -208,11 +209,11 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
-function sameSessionComputerUseConfig(a: unknown, b: unknown): boolean {
+function sameSessionCapabilityConfig(a: unknown, b: unknown): boolean {
   return stableJson(a) === stableJson(b);
 }
 
-function sameComputerUseClientBinding(params: {
+function sameSessionClientCapabilityBinding(params: {
   existing: unknown;
   next: unknown;
   enabled: boolean;
@@ -2567,6 +2568,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemProvenanceReceipt?: string;
       extensions?: {
         computerUse?: unknown;
+        browserUse?: unknown;
       };
       idempotencyKey: string;
     };
@@ -2646,6 +2648,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         ? p.extensions.computerUse
         : undefined,
     );
+    const normalizedBrowserUse = normalizeBrowserUseSessionConfig(
+      p.extensions && typeof p.extensions === "object" && !Array.isArray(p.extensions)
+        ? p.extensions.browserUse
+        : undefined,
+    );
 
     if (normalizedComputerUse) {
       const computerUseBinding = buildSessionClientCapabilityBindingFromClient({
@@ -2654,8 +2661,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       const existingComputerUseBinding = entry?.clientCapabilityBindings?.computer_use;
       const needsComputerUsePatch =
-        !sameSessionComputerUseConfig(entry?.computerUse, normalizedComputerUse) ||
-        !sameComputerUseClientBinding({
+        !sameSessionCapabilityConfig(entry?.computerUse, normalizedComputerUse) ||
+        !sameSessionClientCapabilityBinding({
           existing: existingComputerUseBinding,
           next: computerUseBinding,
           enabled: normalizedComputerUse.enabled,
@@ -2702,6 +2709,65 @@ export const chatHandlers: GatewayRequestHandlers = {
         entry = applied.entry;
         context.logGateway.info(
           `computer_use chat.send applied session=${sessionKey} enabled=${entry.computerUse?.enabled === true} binding=${entry.clientCapabilityBindings?.computer_use ? "yes" : "no"}`,
+        );
+      }
+    }
+
+    if (normalizedBrowserUse) {
+      const browserUseBinding = buildSessionClientCapabilityBindingFromClient({
+        client,
+        capability: "browser_use",
+      });
+      const existingBrowserUseBinding = entry?.clientCapabilityBindings?.browser_use;
+      const needsBrowserUsePatch =
+        !sameSessionCapabilityConfig(entry?.browserUse, normalizedBrowserUse) ||
+        !sameSessionClientCapabilityBinding({
+          existing: existingBrowserUseBinding,
+          next: browserUseBinding,
+          enabled: normalizedBrowserUse.enabled,
+        });
+      if (!needsBrowserUsePatch) {
+        markTiming("browserUsePatchMs");
+      } else {
+        context.logGateway.info(
+          `browser_use chat.send extension session=${sessionKey} enabled=${normalizedBrowserUse.enabled} binding=${browserUseBinding ? "yes" : "no"} client=${formatForLog(client?.connect?.client?.id ?? "n/a")}`,
+        );
+        const applied = await updateSessionStore(storePath, async (store) => {
+          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+            cfg,
+            key: rawSessionKey,
+            store,
+          });
+          const result = await applySessionsPatchToStore({
+            cfg,
+            store,
+            storeKey: primaryKey,
+            patch: {
+              key: rawSessionKey,
+              browserUse: normalizedBrowserUse,
+            },
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          });
+          if (result.ok) {
+            const nextEntry = applySessionClientCapabilityBinding({
+              entry: result.entry,
+              capability: "browser_use",
+              binding: browserUseBinding,
+              enabled: normalizedBrowserUse.enabled,
+            });
+            result.entry = nextEntry;
+            store[primaryKey] = nextEntry;
+          }
+          return result;
+        });
+        if (!applied.ok) {
+          respond(false, undefined, applied.error);
+          return;
+        }
+        markTiming("browserUsePatchMs");
+        entry = applied.entry;
+        context.logGateway.info(
+          `browser_use chat.send applied session=${sessionKey} enabled=${entry.browserUse?.enabled === true} binding=${entry.clientCapabilityBindings?.browser_use ? "yes" : "no"}`,
         );
       }
     }
@@ -2818,6 +2884,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           totalMs: Date.now() - timingStartedAt,
           ...timing,
           hasComputerUse: Boolean(normalizedComputerUse),
+          hasBrowserUse: Boolean(normalizedBrowserUse),
           attachmentCount: normalizedAttachments.length,
         })}`,
       );
@@ -2842,6 +2909,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         preAckTotalMs: runTimingStartedAt - timingStartedAt,
         attachmentCount: normalizedAttachments.length,
         hasComputerUse: Boolean(normalizedComputerUse),
+        hasBrowserUse: Boolean(normalizedBrowserUse),
       });
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,

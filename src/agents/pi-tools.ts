@@ -1,4 +1,5 @@
 import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
+import type { BrowserUseSessionConfig } from "../browser-use/types.js";
 import type { ComputerUseSessionConfig } from "../computer-use/types.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -259,6 +260,7 @@ export function createOpenClawCodingTools(options?: {
   /** Stable run identifier for this agent invocation. */
   runId?: string;
   computerUse?: ComputerUseSessionConfig;
+  browserUse?: BrowserUseSessionConfig;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
@@ -575,6 +577,7 @@ export function createOpenClawCodingTools(options?: {
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
       computerUse: options?.computerUse,
+      browserUse: options?.browserUse,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
       modelHasVision: options?.modelHasVision,

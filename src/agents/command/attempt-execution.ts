@@ -448,6 +448,7 @@ export function runAgentAttempt(params: {
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
     computerUse: params.sessionEntry?.computerUse,
+    browserUse: params.sessionEntry?.browserUse,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lane: params.opts.lane,

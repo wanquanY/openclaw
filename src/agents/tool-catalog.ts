@@ -206,6 +206,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "browser_use",
+    label: "browser_use",
+    description: "Control the visible Doxie in-app browser via page observation and actions",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "browser",
     label: "browser",
     description: "Control web browser",

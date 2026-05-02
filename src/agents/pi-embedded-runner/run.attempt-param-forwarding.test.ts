@@ -79,6 +79,24 @@ const forwardingCases = [
       },
     },
   },
+  {
+    name: "forwards browserUse so embedded attempts can expose the in-app browser tool",
+    runId: "forward-browserUse",
+    params: {
+      browserUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        hostPolicy: "local_only",
+      },
+    },
+    expected: {
+      browserUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        hostPolicy: "local_only",
+      },
+    },
+  },
 ] satisfies ForwardingCase[];
 
 describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", () => {

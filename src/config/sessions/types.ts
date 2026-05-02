@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { BrowserUseSessionConfig } from "../../browser-use/types.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ComputerUseSessionConfig } from "../../computer-use/types.js";
@@ -194,6 +195,7 @@ export type SessionEntry = {
   execAsk?: string;
   execNode?: string;
   computerUse?: ComputerUseSessionConfig;
+  browserUse?: BrowserUseSessionConfig;
   clientCapabilityBindings?: Record<string, SessionClientCapabilityBinding>;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
