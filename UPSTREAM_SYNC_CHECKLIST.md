@@ -641,6 +641,55 @@ git merge upstream
   - agent session 通过 `browserUse` 配置和 `clientCapabilityBindings.browser_use` 定向调用当前桌面客户端。
 - 如果上游后续改 tool catalog、session patch sanitizer、chat send extensions 或 client capability binding，同步后必须先人工复核这里。
 
+### 20. Interactive capability 结果分类、Computer Use 目标策略与 interrupted tool tail 修复
+
+涉及文件：
+
+- `src/interactive-capability/types.ts`
+- `src/browser-use/types.ts`
+- `src/browser-use/schema.ts`
+- `src/agents/tools/browser-use-tool.ts`
+- `src/agents/tools/browser-use-tool.test.ts`
+- `src/computer-use/types.ts`
+- `src/computer-use/schema.ts`
+- `src/agents/tools/computer-use-tool.ts`
+- `src/agents/tools/computer-use-tool.test.ts`
+- `src/agents/tools/computer-use/action-target-policy.ts`
+- `src/agents/tools/computer-use/schema.ts`
+- `src/agents/tools/computer-use/perception.ts`
+- `src/gateway/node-command-policy.ts`
+- `src/agents/interrupted-tool-tail-repair.ts`
+- `src/agents/main-session-restart-recovery.ts`
+- `src/agents/main-session-restart-recovery.test.ts`
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/chat.abort-persistence.test.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts`
+- `src/auto-reply/reply/commands-system-prompt.test.ts`
+- `src/auto-reply/reply/followup-runner.test.ts`
+
+必须确认：
+
+- Browser Use 和 Computer Use 仍然共享 interactive capability 的调用元数据语义，structured result 必须保留 `activation` 和 `source`，不能在工具执行后丢失桌面端能力来源。
+- Browser Use 对 gateway payload 的 `success / failed / approval_required / error` 分类仍然会映射成模型可读文本和结构化错误结果，不能把 host 返回的 observation、action payload 或审批状态吞掉。
+- Browser Use observation 文本仍然包含 title、URL、readable text 和 visible element refs；没有显式 `browserSessionId` 时仍然以当前 OpenClaw session key 作为 owner fallback。
+- Computer Use action target policy 仍然区分读取类命令和控制类动作；`computer.targets`、`computer.ocr`、`computer.cdp` 必须保持 read policy，`computer.action` 必须继续走 action policy 和审批语义。
+- Computer Use schema、types 和 agent tool 内部 schema 必须与 public session config 对齐，不能让 `activation`、`source` 或 target policy 字段在协议层和工具层分叉。
+- `chat.abort` 和 main session restart recovery 都必须在发现 transcript 尾部是未闭合 assistant tool call 时，追加 synthetic error tool result，避免会话因为缺失 tool result 无法继续。
+- interrupted tool tail 修复必须使用 session write lock，并且只修复 SessionManager transcript；非 SessionManager 或不可安全定位的 transcript 只能 warning 后跳过。
+- restart recovery 必须先把 transcript 修成 resumable tail 再恢复运行；如果 tail 仍不可恢复，不能强行继续。
+- abort partial 持久化仍然不能重复写入已经落盘的 assistant partial；即使没有 partial text，也要能补齐缺失的 tool result。
+
+背景：
+
+- 这是 2026-05-04 为桌面 interactive capability、Browser/Computer Use host 返回语义和 abort/restart 后 transcript 可恢复性补充的本地检查点。
+- 下游当前依赖的是：
+  - Browser Use 和 Computer Use 都由桌面 host 执行，agent 只通过 gateway capability binding 调用。
+  - host 返回的失败、审批和 observation 信息能稳定进入模型上下文，便于下一步纠错。
+  - 用户 abort 或 gateway restart 后，不会留下以 assistant tool call 结尾的坏 transcript。
+- 如果上游后续改 client.invoke payload、Computer Use command policy、Pi transcript replay、chat.abort 或 restart recovery，同步后必须先人工复核这里。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -690,6 +739,7 @@ rg -n "chat\\.recallLatest|validateChatRecallLatestParams|wait: Type\\.Optional|
 rg -n "recordToolCreateTiming|logToolCreateTiming|customTools|sessions_spawn|capabilityProvider" src/agents src/plugins
 rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks src/sessions src/gateway src/infra
 rg -n "browser_use|BrowserUseSessionConfig|browserUse|clientCapabilityBindings\\.browser_use|browser.action|browser.observe" src/browser-use src/agents src/auto-reply src/config src/gateway
+rg -n "InteractiveCapability|activation|approval_required|action-target-policy|computer\\.targets|computer\\.ocr|computer\\.cdp|appendSyntheticInterruptedToolResults|isSessionTranscriptResumable" src/interactive-capability src/browser-use src/computer-use src/agents src/gateway
 ```
 
 ### D. 验证范围
@@ -710,6 +760,8 @@ pnpm test -- \
   src/agents/pi-embedded-runner/run/attempt.test.ts \
   src/agents/pi-embedded-runner/run/stream-selection.test.ts \
   src/agents/openai-ws-stream.test.ts \
+  src/agents/main-session-restart-recovery.test.ts \
+  src/agents/tools/browser-use-tool.test.ts \
   src/agents/tools/computer-use-tool.test.ts \
   src/agents/pi-embedded-runner/computer-use-observation-context.test.ts \
   src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts \

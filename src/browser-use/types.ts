@@ -1,3 +1,10 @@
+import {
+  INTERACTIVE_CAPABILITY_ACTIVATIONS,
+  type InteractiveCapabilityActivation,
+  INTERACTIVE_CAPABILITY_SOURCES,
+  type InteractiveCapabilitySource,
+} from "../interactive-capability/types.js";
+
 export const BROWSER_USE_MODES = ["plan_and_act", "observe_only"] as const;
 
 export const BROWSER_USE_HOST_POLICIES = [
@@ -6,17 +13,25 @@ export const BROWSER_USE_HOST_POLICIES = [
   "remote_allowed",
 ] as const;
 
-export const BROWSER_USE_ACTIVATIONS = ["auto", "required"] as const;
+export const BROWSER_USE_ACTIVATIONS = INTERACTIVE_CAPABILITY_ACTIVATIONS;
+export const BROWSER_USE_ACTIVATION_SOURCES = INTERACTIVE_CAPABILITY_SOURCES;
 
 export type BrowserUseMode = (typeof BROWSER_USE_MODES)[number];
 export type BrowserUseHostPolicy = (typeof BROWSER_USE_HOST_POLICIES)[number];
-export type BrowserUseActivation = (typeof BROWSER_USE_ACTIVATIONS)[number];
+export type BrowserUseActivation = InteractiveCapabilityActivation;
+export type BrowserUseActivationSource = InteractiveCapabilitySource;
 
 export type BrowserUseSessionConfig = {
   enabled: boolean;
   mode: BrowserUseMode;
   hostPolicy: BrowserUseHostPolicy;
   activation: BrowserUseActivation;
+  source?: BrowserUseActivationSource;
+};
+
+export type BrowserUseInvocationMetadata = {
+  activation: BrowserUseActivation;
+  source?: BrowserUseActivationSource;
 };
 
 export const DEFAULT_BROWSER_USE_SESSION_CONFIG = {
@@ -42,7 +57,7 @@ function normalizeStringEnum<T extends readonly string[]>(
 }
 
 function hasRecognizedSessionConfigKey(value: Record<string, unknown>): boolean {
-  return ["enabled", "mode", "hostPolicy", "activation"].some((key) => key in value);
+  return ["enabled", "mode", "hostPolicy", "activation", "source"].some((key) => key in value);
 }
 
 export function normalizeBrowserUseSessionConfig(
@@ -65,6 +80,9 @@ export function normalizeBrowserUseSessionConfig(
     activation:
       normalizeStringEnum(value.activation, BROWSER_USE_ACTIVATIONS) ??
       DEFAULT_BROWSER_USE_SESSION_CONFIG.activation,
+    ...(normalizeStringEnum(value.source, BROWSER_USE_ACTIVATION_SOURCES)
+      ? { source: normalizeStringEnum(value.source, BROWSER_USE_ACTIVATION_SOURCES) }
+      : {}),
   };
 }
 

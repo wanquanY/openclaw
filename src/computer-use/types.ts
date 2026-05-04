@@ -1,3 +1,9 @@
+import {
+  INTERACTIVE_CAPABILITY_ACTIVATIONS,
+  type InteractiveCapabilityActivation,
+  INTERACTIVE_CAPABILITY_SOURCES,
+  type InteractiveCapabilitySource,
+} from "../interactive-capability/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const COMPUTER_USE_SCOPE_TYPES = [
@@ -14,6 +20,9 @@ export const COMPUTER_USE_HOST_POLICIES = [
   "local_preferred",
   "remote_allowed",
 ] as const;
+
+export const COMPUTER_USE_ACTIVATIONS = INTERACTIVE_CAPABILITY_ACTIVATIONS;
+export const COMPUTER_USE_ACTIVATION_SOURCES = INTERACTIVE_CAPABILITY_SOURCES;
 
 export const COMPUTER_USE_MODEL_POLICY_MODES = [
   "follow_user_model",
@@ -52,6 +61,8 @@ export const COMPUTER_USE_PERMISSION_STATES = ["granted", "denied", "unknown"] a
 export type ComputerUseScopeType = (typeof COMPUTER_USE_SCOPE_TYPES)[number];
 export type ComputerUseMode = (typeof COMPUTER_USE_MODES)[number];
 export type ComputerUseHostPolicy = (typeof COMPUTER_USE_HOST_POLICIES)[number];
+export type ComputerUseActivation = InteractiveCapabilityActivation;
+export type ComputerUseActivationSource = InteractiveCapabilitySource;
 export type ComputerUseModelPolicyMode = (typeof COMPUTER_USE_MODEL_POLICY_MODES)[number];
 export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
 export type ComputerUseStage = (typeof COMPUTER_USE_STAGES)[number];
@@ -67,6 +78,8 @@ export type ComputerUseScope = {
 export type ComputerUseSessionConfig = {
   enabled: boolean;
   mode: ComputerUseMode;
+  activation: ComputerUseActivation;
+  source?: ComputerUseActivationSource;
   scope: ComputerUseScope;
   hostPolicy: ComputerUseHostPolicy;
   modelPolicy: {
@@ -81,6 +94,7 @@ export type ComputerUseSessionConfig = {
 export const DEFAULT_COMPUTER_USE_SESSION_CONFIG = {
   enabled: false,
   mode: "plan_and_act",
+  activation: "auto",
   scope: {
     type: "full_desktop",
   },
@@ -480,6 +494,8 @@ export type ComputerUseTargetCatalog = {
 export type ComputerUseStructuredPayload = {
   kind: "computer_use/v1";
   status?: "ok" | "approval-pending" | "error";
+  activation?: ComputerUseActivation;
+  source?: ComputerUseActivationSource;
   stage: ComputerUseStage;
   summary?: string;
   frame?: ComputerUseFrameArtifactRef;
@@ -523,9 +539,16 @@ function normalizeStringEnum<T extends readonly string[]>(
 }
 
 function hasRecognizedSessionConfigKey(value: Record<string, unknown>): boolean {
-  return ["enabled", "mode", "scope", "hostPolicy", "modelPolicy", "approvals"].some(
-    (key) => key in value,
-  );
+  return [
+    "enabled",
+    "mode",
+    "activation",
+    "source",
+    "scope",
+    "hostPolicy",
+    "modelPolicy",
+    "approvals",
+  ].some((key) => key in value);
 }
 
 export function normalizeComputerUseSessionConfig(
@@ -562,6 +585,12 @@ export function normalizeComputerUseSessionConfig(
     mode:
       normalizeStringEnum(value.mode, COMPUTER_USE_MODES) ??
       DEFAULT_COMPUTER_USE_SESSION_CONFIG.mode,
+    activation:
+      normalizeStringEnum(value.activation, COMPUTER_USE_ACTIVATIONS) ??
+      DEFAULT_COMPUTER_USE_SESSION_CONFIG.activation,
+    ...(normalizeStringEnum(value.source, COMPUTER_USE_ACTIVATION_SOURCES)
+      ? { source: normalizeStringEnum(value.source, COMPUTER_USE_ACTIVATION_SOURCES) }
+      : {}),
     scope,
     hostPolicy:
       normalizeStringEnum(value.hostPolicy, COMPUTER_USE_HOST_POLICIES) ??

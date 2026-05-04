@@ -1506,7 +1506,7 @@ function rememberComputerUseCandidates(params: {
   observation?: ComputerUseObservation;
   candidates?: ComputerUseCandidate[];
 }): void {
-  if (!params.candidates || params.candidates.length === 0) {
+  if (!params.observation && (!params.candidates || params.candidates.length === 0)) {
     return;
   }
   const nowMs = Date.now();
@@ -1516,7 +1516,7 @@ function rememberComputerUseCandidates(params: {
   computerUseCandidateMemoryBySession.set(key, {
     updatedAtMs: nowMs,
     observation: params.observation,
-    candidates: params.candidates.map((candidate) => ({
+    candidates: (params.candidates ?? []).map((candidate) => ({
       candidate,
       observation: params.observation,
       updatedAtMs: nowMs,
@@ -1545,6 +1545,43 @@ function lookupRememberedComputerUseCandidate(params: {
       candidate.sourceId === normalizedRef ||
       candidate.stableKey === normalizedRef,
   );
+}
+
+function lookupRememberedComputerUseObservation(params: {
+  sessionKey?: string;
+  agentId?: string;
+  targetId?: string;
+  windowId?: string;
+  appName?: string;
+  bundleId?: string;
+}): ComputerUseObservation | undefined {
+  const expectedTargetId = normalizeTargetLookupValue(params.targetId);
+  const expectedWindowId = normalizeTargetLookupValue(params.windowId);
+  const expectedAppName = normalizeTargetLookupValue(params.appName);
+  const expectedBundleId = normalizeTargetLookupValue(params.bundleId);
+  if (!expectedTargetId && !expectedWindowId && !expectedAppName && !expectedBundleId) {
+    return undefined;
+  }
+  pruneComputerUseCandidateMemory();
+  const memory = computerUseCandidateMemoryBySession.get(computerUseCandidateMemoryKey(params));
+  const observations = [
+    memory?.observation,
+    ...(memory?.candidates.map((item) => item.observation) ?? []),
+  ].filter((item): item is ComputerUseObservation => Boolean(item));
+  return observations.find((observation) => {
+    if (expectedTargetId && normalizeTargetLookupValue(observation.targetId) === expectedTargetId) {
+      return true;
+    }
+    if (expectedWindowId && normalizeTargetLookupValue(observation.windowId) === expectedWindowId) {
+      return true;
+    }
+    if (expectedBundleId && normalizeTargetLookupValue(observation.bundleId) === expectedBundleId) {
+      return true;
+    }
+    return Boolean(
+      expectedAppName && normalizeTargetLookupValue(observation.appName) === expectedAppName,
+    );
+  });
 }
 
 function targetIdsConflict(left?: string, right?: string): boolean {
@@ -1954,6 +1991,7 @@ export {
   findCandidateByRememberedSelector,
   focusTargetMatchesExpectation,
   lookupRememberedComputerUseCandidate,
+  lookupRememberedComputerUseObservation,
   mergeComputerUseWarnings,
   normalizeTargetLookupValue,
   readElementRef,

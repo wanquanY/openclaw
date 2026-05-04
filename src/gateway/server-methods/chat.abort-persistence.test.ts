@@ -236,6 +236,68 @@ describe("chat abort transcript persistence", () => {
     expect(runBPersisted).toBeUndefined();
   });
 
+  it("closes an interrupted tool-call tail on run-scoped abort even without partial text", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-tool-tail-",
+    );
+    const runId = "idem-abort-tool-tail-run";
+    appendTranscriptMessage(transcriptPath, {
+      role: "user",
+      content: `Conversation info: ${runId}`,
+      timestamp: Date.now(),
+    });
+    appendTranscriptMessage(transcriptPath, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "我先查一下这条会话的历史范围。" },
+        {
+          type: "toolCall",
+          id: "call_abort_tail",
+          name: "sessions_history",
+          arguments: { limit: 20 },
+        },
+      ],
+      api: "openai-completions",
+      provider: "video-workflow",
+      model: "gpt-5.4",
+      usage: zeroUsage,
+      timestamp: Date.now() + 1,
+      stopReason: "toolUse",
+    });
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: true, runIds: [runId] });
+
+    const messages = (await readTranscriptLines(transcriptPath))
+      .map((line) => line.message)
+      .filter((message): message is Record<string, unknown> => Boolean(message));
+    expect(messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call_abort_tail",
+      toolName: "sessions_history",
+      isError: true,
+    });
+    const abortPartial = messages.find(
+      (message) => message.idempotencyKey === `${runId}:assistant`,
+    );
+    expect(abortPartial).toBeUndefined();
+  });
+
   it("does not persist an abort aggregate when current-run assistant segments already cover it", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-dedupe-",

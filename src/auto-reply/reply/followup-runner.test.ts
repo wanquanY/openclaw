@@ -1023,6 +1023,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
           computerUse: {
             enabled: true,
             mode: "plan_and_act",
+            activation: "auto",
             scope: { type: "full_desktop" },
             hostPolicy: "local_only",
             modelPolicy: { mode: "follow_user_model" },
@@ -1040,6 +1041,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     expect(call?.computerUse).toEqual({
       enabled: true,
       mode: "plan_and_act",
+      activation: "auto",
       scope: { type: "full_desktop" },
       hostPolicy: "local_only",
       modelPolicy: { mode: "follow_user_model" },

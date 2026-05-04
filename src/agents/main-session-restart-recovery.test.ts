@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import {
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
@@ -42,6 +44,17 @@ async function writeTranscript(
 ): Promise<void> {
   const lines = messages.map((message) => JSON.stringify({ message })).join("\n");
   await fs.writeFile(path.join(sessionsDir, `${sessionId}.jsonl`), `${lines}\n`);
+}
+
+function writeSessionManagerTranscript(
+  sessionsDir: string,
+  sessionId: string,
+  messages: Parameters<SessionManager["appendMessage"]>[0][],
+): void {
+  const session = SessionManager.open(path.join(sessionsDir, `${sessionId}.jsonl`));
+  for (const message of messages) {
+    session.appendMessage(message);
+  }
 }
 
 function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspection {
@@ -118,6 +131,59 @@ describe("main-session-restart-recovery", () => {
       sessionKey: "agent:main:main",
       deliver: false,
       lane: "main",
+    });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+  });
+
+  it("repairs an interrupted assistant tool-call tail before resuming", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    writeSessionManagerTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "inspect history", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "sessions_history", arguments: {} }],
+        api: "openai-completions",
+        provider: "doxie",
+        model: "gpt-5.4",
+        stopReason: "toolUse",
+        timestamp: Date.now(),
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const messages = readSessionMessages("main-session", path.join(sessionsDir, "sessions.json"));
+    const repaired = messages.at(-1);
+    expect(repaired).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "sessions_history",
+      isError: true,
     });
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);

@@ -3,6 +3,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { appendSyntheticInterruptedToolResults } from "../../agents/interrupted-tool-tail-repair.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -2025,6 +2026,31 @@ function persistAbortedPartials(params: {
   }
 }
 
+async function persistInterruptedToolTailOnAbort(params: {
+  context: Pick<GatewayRequestContext, "logGateway">;
+  sessionKey: string;
+}): Promise<void> {
+  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  if (!entry) {
+    return;
+  }
+  try {
+    await appendSyntheticInterruptedToolResults({
+      storePath,
+      sessionKey: params.sessionKey,
+      entry,
+      log: params.context.logGateway,
+      missingToolResultText:
+        "[openclaw] tool call interrupted by user abort before its result was persisted; " +
+        "inserted synthetic error result so the transcript can close cleanly.",
+    });
+  } catch (err) {
+    params.context.logGateway.warn(
+      `chat.abort interrupted tool tail repair failed: ${String(err)}`,
+    );
+  }
+}
+
 function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
@@ -2135,7 +2161,7 @@ function resolveAuthorizedRunIdsForSession(params: {
   };
 }
 
-function abortChatRunsForSessionKeyWithPartials(params: {
+async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
@@ -2175,6 +2201,10 @@ function abortChatRunsForSessionKeyWithPartials(params: {
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
+    await persistInterruptedToolTailOnAbort({
+      context: params.context,
+      sessionKey: params.sessionKey,
+    });
     persistAbortedPartials({
       context: params.context,
       sessionKey: params.sessionKey,
@@ -2345,7 +2375,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       verboseLevel,
     });
   },
-  "chat.abort": ({ params, respond, context, client }) => {
+  "chat.abort": async ({ params, respond, context, client }) => {
     if (!validateChatAbortParams(params)) {
       respond(
         false,
@@ -2366,7 +2396,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
-      const res = abortChatRunsForSessionKeyWithPartials({
+      const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: rawSessionKey,
@@ -2406,6 +2436,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: rawSessionKey,
       stopReason: "rpc",
     });
+    if (res.aborted) {
+      await persistInterruptedToolTailOnAbort({
+        context,
+        sessionKey: rawSessionKey,
+      });
+    }
     if (res.aborted && partialText && partialText.trim()) {
       persistAbortedPartials({
         context,
@@ -2464,7 +2500,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const abortRes = abortChatRunsForSessionKeyWithPartials({
+    const abortRes = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
@@ -2477,7 +2513,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     if (sessionKey !== rawSessionKey) {
-      const canonicalAbortRes = abortChatRunsForSessionKeyWithPartials({
+      const canonicalAbortRes = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey,
@@ -2790,7 +2826,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     markTiming("sendPolicyMs");
 
     if (stopCommand) {
-      const res = abortChatRunsForSessionKeyWithPartials({
+      const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,

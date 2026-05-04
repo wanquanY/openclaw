@@ -38,11 +38,181 @@ type BrowserUseToolPayload = {
   kind: "browser_use/v1";
   action: BrowserUseToolAction;
   status: "success" | "error";
+  activation?: BrowserUseSessionConfig["activation"];
+  source?: BrowserUseSessionConfig["source"];
   command?: string;
   summary: string;
   result?: unknown;
   error?: string;
 };
+
+type BrowserUseResultStatus = "success" | "failed" | "approval_required" | "error";
+
+type BrowserUseResultClassification = {
+  ok: boolean;
+  status?: BrowserUseResultStatus;
+  errorMessage?: string;
+  errorCode?: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function trimText(value: unknown, limit = 1200): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, limit);
+}
+
+function summarizeElements(value: unknown, limit = 24): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, limit).flatMap((item, index) => {
+    const record = asRecord(item);
+    if (!record) return [];
+    const ref = trimText(record.ref, 80);
+    const role = trimText(record.role, 40);
+    const name = trimText(record.name, 140) || trimText(record.text, 140);
+    const tag = trimText(record.tagName, 30);
+    const label = [ref || `#${index + 1}`, role || tag, name].filter(Boolean).join(" · ");
+    return label ? [label] : [];
+  });
+}
+
+function formatObservationForModel(observation: unknown): string {
+  const record = asRecord(observation);
+  if (!record) return "";
+  const title = trimText(record.title, 200);
+  const url = trimText(record.url, 500);
+  const pageText = trimText(record.pageText, 3000);
+  const elements = summarizeElements(record.elements);
+  const lines = [
+    title ? `Title: ${title}` : "",
+    url ? `URL: ${url}` : "",
+    pageText ? `Readable text:\n${pageText}` : "",
+    elements.length > 0
+      ? `Visible elements:\n${elements.map((item) => `- ${item}`).join("\n")}`
+      : "",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function resolveObservationLike(result: unknown): unknown {
+  const record = asRecord(result);
+  if (!record) return undefined;
+  const payload = asRecord(record.payload);
+  if (payload) {
+    return resolveObservationLike(payload);
+  }
+  if (record.kind === "browser_use/v1" && Array.isArray(record.elements)) return record;
+  const postActionObservation = record.postActionObservation;
+  if (postActionObservation) return postActionObservation;
+  const postNavigationObservation = record.postNavigationObservation;
+  if (postNavigationObservation) return postNavigationObservation;
+  const nestedResult = asRecord(record.result);
+  const nestedPayload = asRecord(nestedResult?.payload);
+  if (nestedPayload) {
+    return resolveObservationLike(nestedPayload);
+  }
+  if (nestedResult?.postActionObservation) return nestedResult.postActionObservation;
+  if (nestedResult?.postNavigationObservation) return nestedResult.postNavigationObservation;
+  return undefined;
+}
+
+function formatBrowserUseToolText(
+  action: BrowserUseToolAction,
+  summary: string,
+  result: unknown,
+): string {
+  const observationText = formatObservationForModel(resolveObservationLike(result));
+  if (observationText) {
+    return `${summary}\n\n${observationText}`;
+  }
+
+  const record = unwrapGatewayPayloadRecord(result);
+  if (action === "status" || action === "sessions") {
+    const sessions = Array.isArray(record?.sessions)
+      ? record.sessions
+      : Array.isArray(result)
+        ? result
+        : [];
+    if (sessions.length > 0) {
+      return `${summary}\n\nSessions:\n${sessions
+        .slice(0, 8)
+        .map((session) => {
+          const item = asRecord(session) ?? {};
+          const id = trimText(item.browserSessionId, 120);
+          const tabs = Array.isArray(item.tabs) ? item.tabs : [];
+          const activeTab = tabs.find((tab) => asRecord(tab)?.active === true) ?? tabs[0];
+          const tab = asRecord(activeTab) ?? {};
+          return `- ${id || "browser"} ${trimText(tab.title, 120)} ${trimText(tab.url, 300)}`.trim();
+        })
+        .join("\n")}`;
+    }
+  }
+  return summary;
+}
+
+function readBrowserUseStatus(value: unknown): BrowserUseResultStatus | undefined {
+  const status = normalizeOptionalString(value);
+  if (
+    status === "success" ||
+    status === "failed" ||
+    status === "approval_required" ||
+    status === "error"
+  ) {
+    return status;
+  }
+  return undefined;
+}
+
+function unwrapGatewayPayloadRecord(value: unknown): Record<string, unknown> | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const payload = asRecord(record.payload);
+  return payload ?? record;
+}
+
+function unwrapGatewayPayload(value: unknown): unknown {
+  const record = asRecord(value);
+  if (!record) return value;
+  return asRecord(record.payload) ?? value;
+}
+
+function readBrowserUseErrorMessage(record: Record<string, unknown>): {
+  message?: string;
+  code?: string;
+} {
+  const errorRecord = asRecord(record.error);
+  const message =
+    normalizeOptionalString(errorRecord?.message) ??
+    normalizeOptionalString(record.message) ??
+    normalizeOptionalString(record.fallbackReason) ??
+    normalizeOptionalString(record.error);
+  const code =
+    normalizeOptionalString(errorRecord?.code) ??
+    normalizeOptionalString(record.errorCode) ??
+    normalizeOptionalString(record.fallbackReason);
+  return { message, code };
+}
+
+function classifyBrowserUseResult(result: unknown): BrowserUseResultClassification {
+  const record = unwrapGatewayPayloadRecord(result);
+  if (!record) return { ok: true };
+
+  const status = readBrowserUseStatus(record.status);
+  if (!status) return { ok: true };
+  if (status === "success") return { ok: true, status };
+
+  const { message, code } = readBrowserUseErrorMessage(record);
+  return {
+    ok: false,
+    status,
+    errorMessage: message ?? `browser_use returned ${status}`,
+    errorCode: code,
+  };
+}
 
 const BrowserUseToolSchema = Type.Object({
   action: stringEnum(BROWSER_USE_ACTIONS, {
@@ -68,8 +238,13 @@ const BrowserUseToolSchema = Type.Object({
 });
 
 function summarizeResult(action: BrowserUseToolAction, result: unknown): string {
-  if (result && typeof result === "object") {
-    const record = result as Record<string, unknown>;
+  const classification = classifyBrowserUseResult(result);
+  if (!classification.ok) {
+    const suffix = classification.errorMessage ? `: ${classification.errorMessage}` : "";
+    return `browser_use ${action} failed${suffix}`;
+  }
+  const record = unwrapGatewayPayloadRecord(result);
+  if (record) {
     const url = normalizeOptionalString(record.url);
     const title = normalizeOptionalString(record.title);
     const sessionId =
@@ -110,14 +285,33 @@ async function invokeBrowserClientCommand(params: {
 }
 
 function readActionParams(params: Record<string, unknown>) {
+  const browserSessionId = readStringParam(params, "browserSessionId");
+  const tabId = readStringParam(params, "tabId");
+  const ref = readStringParam(params, "ref");
+  const selector = readStringParam(params, "selector");
+  const text = readStringParam(params, "text", { allowEmpty: true });
+  const deltaX = readNumberParam(params, "deltaX");
+  const deltaY = readNumberParam(params, "deltaY");
+
   return {
-    browserSessionId: readStringParam(params, "browserSessionId"),
-    tabId: readStringParam(params, "tabId"),
-    ref: readStringParam(params, "ref"),
-    selector: readStringParam(params, "selector"),
-    text: readStringParam(params, "text", { allowEmpty: true }),
-    deltaX: readNumberParam(params, "deltaX"),
-    deltaY: readNumberParam(params, "deltaY"),
+    ...(browserSessionId ? { browserSessionId } : {}),
+    ...(tabId ? { tabId } : {}),
+    ...(ref ? { ref } : {}),
+    ...(selector ? { selector } : {}),
+    ...(text !== undefined ? { text } : {}),
+    ...(deltaX !== undefined ? { deltaX } : {}),
+    ...(deltaY !== undefined ? { deltaY } : {}),
+  };
+}
+
+function buildBrowserSessionCommandParams(
+  sessionKey: string | undefined,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const browserSessionId = readStringParam(params, "browserSessionId");
+  return {
+    ...(browserSessionId ? { browserSessionId } : {}),
+    ...(!browserSessionId && sessionKey ? { ownerSessionKey: sessionKey } : {}),
   };
 }
 
@@ -143,6 +337,7 @@ async function executeBrowserUseAction(params: {
     command: "browser.action",
     timeoutMs: params.timeoutMs,
     commandParams: {
+      ...buildBrowserSessionCommandParams(params.sessionKey, params.toolParams),
       action: params.action,
       ...actionParams,
     },
@@ -155,7 +350,13 @@ export function createBrowserUseTool(options: {
   agentId?: string;
   config?: OpenClawConfig;
 }): AnyAgentTool {
-  const activation = normalizeBrowserUseSessionConfig(options.sessionConfig)?.activation ?? "auto";
+  const sessionConfig =
+    normalizeBrowserUseSessionConfig(options.sessionConfig) ?? options.sessionConfig;
+  const activation = sessionConfig.activation;
+  const invocationMetadata = {
+    activation,
+    ...(sessionConfig.source ? { source: sessionConfig.source } : {}),
+  };
   const activationInstruction =
     activation === "required"
       ? "The user explicitly selected Browser Use for this turn; use this tool to complete the browser-facing part of the request unless it is impossible or unsafe."
@@ -206,8 +407,8 @@ export function createBrowserUseTool(options: {
             command,
             timeoutMs,
             commandParams: {
+              ...buildBrowserSessionCommandParams(options.sessionKey, params),
               url,
-              browserSessionId: readStringParam(params, "browserSessionId"),
             },
           });
         } else if (action === "observe") {
@@ -217,7 +418,7 @@ export function createBrowserUseTool(options: {
             command,
             timeoutMs,
             commandParams: {
-              browserSessionId: readStringParam(params, "browserSessionId"),
+              ...buildBrowserSessionCommandParams(options.sessionKey, params),
               tabId: readStringParam(params, "tabId"),
               maxNodes: readNumberParam(params, "maxNodes", { integer: true }),
             },
@@ -241,7 +442,7 @@ export function createBrowserUseTool(options: {
             command,
             timeoutMs,
             commandParams: {
-              browserSessionId: readStringParam(params, "browserSessionId"),
+              ...buildBrowserSessionCommandParams(options.sessionKey, params),
             },
           });
         } else {
@@ -255,19 +456,43 @@ export function createBrowserUseTool(options: {
         }
 
         const summary = summarizeResult(action, result);
+        const classification = classifyBrowserUseResult(result);
+        const toolResultPayload = unwrapGatewayPayload(result);
+        if (!classification.ok) {
+          log.warn(summary, {
+            sessionKey: options.sessionKey,
+            agentId: options.agentId,
+            action,
+            command,
+            status: classification.status,
+            errorCode: classification.errorCode,
+          });
+          return textResult(formatBrowserUseToolText(action, summary, result), {
+            kind: "browser_use/v1",
+            action,
+            status: "error",
+            ...invocationMetadata,
+            command,
+            summary,
+            result: toolResultPayload,
+            error: classification.errorMessage ?? summary,
+          });
+        }
+
         log.info(summary, {
           sessionKey: options.sessionKey,
           agentId: options.agentId,
           action,
           command,
         });
-        return textResult(summary, {
+        return textResult(formatBrowserUseToolText(action, summary, result), {
           kind: "browser_use/v1",
           action,
           status: "success",
+          ...invocationMetadata,
           command,
           summary,
-          result,
+          result: toolResultPayload,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -281,6 +506,7 @@ export function createBrowserUseTool(options: {
           kind: "browser_use/v1",
           action,
           status: "error",
+          ...invocationMetadata,
           summary: `browser_use ${action} failed`,
           error: message,
         });

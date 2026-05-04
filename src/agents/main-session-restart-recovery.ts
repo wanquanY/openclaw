@@ -11,6 +11,10 @@ import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  appendSyntheticInterruptedToolResults,
+  isSessionTranscriptResumable,
+} from "./interrupted-tool-tail-repair.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -41,30 +45,22 @@ function sessionIdFromLockPath(lockPath: string): string | undefined {
   return sessionId || undefined;
 }
 
-function getMessageRole(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const role = (message as { role?: unknown }).role;
-  return typeof role === "string" ? role : undefined;
-}
-
-function isMeaningfulTailMessage(message: unknown): boolean {
-  const role = getMessageRole(message);
-  if (!role || role === "system") {
-    return false;
-  }
-  return true;
-}
-
-function isResumableTailMessage(message: unknown): boolean {
-  const role = getMessageRole(message);
-  return role === "user" || role === "tool" || role === "toolResult";
-}
-
-function isMainSessionResumable(messages: unknown[]): boolean {
-  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  return lastMeaningful ? isResumableTailMessage(lastMeaningful) : false;
+async function repairInterruptedAssistantToolTail(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+  messages: unknown[];
+}): Promise<unknown[]> {
+  const repaired = await appendSyntheticInterruptedToolResults({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    entry: params.entry,
+    log,
+    missingToolResultText:
+      "[openclaw] interrupted by gateway restart before this tool result was persisted; " +
+      "inserted synthetic error result so the session transcript can resume.",
+  });
+  return repaired.inserted > 0 ? repaired.messages : params.messages;
 }
 
 function buildResumeMessage(): string {
@@ -216,7 +212,14 @@ async function recoverStore(params: {
       continue;
     }
 
-    if (!isMainSessionResumable(messages)) {
+    messages = await repairInterruptedAssistantToolTail({
+      storePath: params.storePath,
+      sessionKey,
+      entry,
+      messages,
+    });
+
+    if (!isSessionTranscriptResumable(messages)) {
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,

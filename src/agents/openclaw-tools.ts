@@ -276,13 +276,13 @@ export function createOpenClawTools(
     });
   });
   logVerbose(
-    `computer_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+    `computer_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} activation=${options?.computerUse?.activation ?? "n/a"} source=${options?.computerUse?.source ?? "n/a"} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
   );
   defaultRuntime.log?.(
-    `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+    `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} activation=${options?.computerUse?.activation ?? "n/a"} source=${options?.computerUse?.source ?? "n/a"} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
   );
   logVerbose(
-    `browser_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.browserUse?.enabled === true} hostPolicy=${options?.browserUse?.hostPolicy ?? "n/a"}`,
+    `browser_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.browserUse?.enabled === true} activation=${options?.browserUse?.activation ?? "n/a"} source=${options?.browserUse?.source ?? "n/a"} hostPolicy=${options?.browserUse?.hostPolicy ?? "n/a"}`,
   );
   const tools: AnyAgentTool[] = recordToolCreateTiming(timings, "coreToolsArrayMs", () => [
     createCanvasTool({ config: options?.config }),

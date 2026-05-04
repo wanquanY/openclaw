@@ -28,8 +28,11 @@ const COMPUTER_USE_READ_COMMANDS = [
   "computer.status",
   "computer.displays",
   "computer.windows",
+  "computer.targets",
   "computer.capture",
   "computer.ax",
+  "computer.ocr",
+  "computer.cdp",
 ];
 const COMPUTER_USE_ACTION_COMMANDS = ["computer.action"];
 

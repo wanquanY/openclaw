@@ -615,7 +615,7 @@ export async function runEmbeddedAttempt(
         });
     setupTimings.toolsCreateMs = Date.now() - toolsStartedAt;
     defaultRuntime.log?.(
-      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
+      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} activation=${params.computerUse?.activation ?? "n/a"} source=${params.computerUse?.source ?? "n/a"} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
     );
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -623,7 +623,7 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     defaultRuntime.log?.(
-      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
+      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} activation=${params.computerUse?.activation ?? "n/a"} source=${params.computerUse?.source ?? "n/a"} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
     );
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpStartedAt = Date.now();
