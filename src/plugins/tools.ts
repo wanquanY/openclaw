@@ -13,12 +13,16 @@ import {
 } from "./runtime/load-context.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-type PluginToolMeta = {
+export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
 };
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+
+export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
+  pluginToolMeta.set(tool, meta);
+}
 
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
@@ -58,6 +62,14 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
 }) {
+  const activeRegistry = getActivePluginRegistry();
+  if (
+    activeRegistry &&
+    (!params.allowGatewaySubagentBinding ||
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable")
+  ) {
+    return activeRegistry;
+  }
   if (
     params.allowGatewaySubagentBinding &&
     getActivePluginRegistryKey() &&

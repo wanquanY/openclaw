@@ -18,6 +18,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveHookConfig } from "./config.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
 const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
@@ -28,6 +29,24 @@ function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
     return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
   }
   return resolveAgentTimeoutMs({ cfg });
+}
+
+function resolveConfiguredSlugModelRef(cfg: OpenClawConfig): string | undefined {
+  const hookConfig = resolveHookConfig(cfg, "session-memory");
+  const raw = hookConfig?.llmSlug;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const model = (raw as { model?: unknown }).model;
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const trimmed = model.trim();
+  return trimmed || undefined;
 }
 
 /**
@@ -55,8 +74,11 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    // Resolve model from agent config instead of using hardcoded defaults
-    const modelRef = resolveAgentEffectiveModelPrimary(params.cfg, agentId);
+    // Prefer the hook-specific model so low-priority slugging does not consume
+    // the main chat model by default.
+    const modelRef =
+      resolveConfiguredSlugModelRef(params.cfg) ||
+      resolveAgentEffectiveModelPrimary(params.cfg, agentId);
     const parsed = modelRef ? parseModelRef(modelRef, DEFAULT_PROVIDER) : null;
     const provider = parsed?.provider ?? DEFAULT_PROVIDER;
     const model = parsed?.model ?? DEFAULT_MODEL;
@@ -75,6 +97,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       model,
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
+      cleanupBundleMcpOnRunEnd: true,
     });
 
     // Extract text from payloads

@@ -1,14 +1,14 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { logVerbose } from "../../globals.js";
+import { normalizeXaiModelId } from "../../plugin-sdk/xai-model-id.js";
 import { resolveBundledWebSearchPluginId } from "../../plugins/bundled-web-search-provider-ids.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveWebSearchDefinition } from "../../web-search/runtime.js";
-import { normalizeXaiModelId } from "../../plugin-sdk/xai-model-id.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringArrayParam, readStringParam } from "./common.js";
 import { withTrustedWebToolsEndpoint } from "./web-guarded-fetch.js";
@@ -2116,7 +2116,11 @@ export function createWebSearchTool(options?: {
       parameters: resolved.definition.parameters,
       execute: async (_toolCallId, args) => {
         try {
-          return jsonResult(await resolved.definition.execute(args));
+          const toolArgs =
+            args && typeof args === "object" && !Array.isArray(args)
+              ? (args as Record<string, unknown>)
+              : {};
+          return jsonResult(await resolved.definition.execute(toolArgs));
         } catch (error) {
           throw wrapWebSearchExecutionError(resolved.provider.id, error);
         }

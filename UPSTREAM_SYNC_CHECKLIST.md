@@ -452,6 +452,244 @@ git merge upstream
   - OpenAI WebSocket 会话可以在多轮 observe / act 中稳定携带 observation continuation
 - 如果上游后续改 gateway client 连接模型、session patch、OpenAI WS incremental input 或工具审批逻辑，同步后必须先人工复核这里
 
+### 15. Runtime model fast path、外部认证同步与 provider auth 选择
+
+涉及文件：
+
+- `src/agents/pi-embedded-runner/runtime-model-fastpath.ts`
+- `src/agents/pi-embedded-runner/run.runtime-model-fastpath.test.ts`
+- `src/agents/pi-embedded-runner/model.ts`
+- `src/agents/pi-embedded-runner/model.test.ts`
+- `src/agents/pi-embedded-runner/run.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/model-auth.ts`
+- `src/agents/model-auth-label.ts`
+- `src/agents/model-fallback.ts`
+- `src/agents/model-fallback.test.ts`
+- `src/agents/auth-profiles/external-auth.ts`
+- `src/agents/auth-profiles/external-cli-sync.ts`
+- `src/agents/auth-profiles.external-cli-sync.test.ts`
+- `src/agents/auth-profiles/store.ts`
+- `src/agents/cli-credentials.ts`
+- `src/plugins/provider-external-auth.types.ts`
+- `src/plugins/provider-runtime.ts`
+- `src/plugins/provider-runtime.test.ts`
+- `src/plugins/provider-hook-runtime.ts`
+- `src/plugins/providers.ts`
+- `src/utils/provider-utils.ts`
+- `src/utils/provider-utils.test.ts`
+
+必须确认：
+
+- `video-workflow` 这类 host runtime 原生 provider 仍然走 runtime model fast path，不能被 PI `models.json` catalog 冷启动生成拖慢首轮。
+- `pluginHarnessOwnsTransport` 为 true 时仍然保持已有的 PI discovery skip 路径，不能错误走 runtime fast path。
+- 外部 CLI auth profile 同步仍然能写入、更新、标注和加载 provider-owned 凭据，不能把外部凭据误归类成普通手填 key。
+- model fallback 保留 provider/auth profile 选择语义，不能在 fallback 后丢失 auth source、label 或 provider-owned external auth。
+- provider hook runtime 和 provider registry 仍然把外部认证能力暴露给运行时，不要只更新类型而忘记 runtime 分发。
+
+背景：
+
+- 这是 2026-05-02 为 `video_workflow` 原生 provider 首轮响应和外部 CLI 凭据同步补充的本地能力。
+- 下游当前依赖的是：
+  - 原生 runtime provider 不被 OpenClaw/PI catalog 生成阻塞。
+  - provider-owned external auth 能在配置、fallback、运行时和 UI label 中保持一致。
+  - 模型切换和 fallback 不会静默切到没有凭据的 provider。
+
+### 16. Chat recall、session create/patch 字段与 memory flush 等待语义
+
+涉及文件：
+
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/chat.directive-tags.test.ts`
+- `src/gateway/server-methods/sessions.ts`
+- `src/gateway/server.sessions.gateway-server-sessions-a.test.ts`
+- `src/gateway/sessions-patch.ts`
+- `src/gateway/sessions-patch.test.ts`
+- `src/gateway/sessions-history-http.ts`
+- `src/gateway/protocol/schema/logs-chat.ts`
+- `src/gateway/protocol/schema/sessions.ts`
+- `src/gateway/protocol/schema/protocol-schemas.ts`
+- `src/gateway/protocol/schema/types.ts`
+- `src/gateway/protocol/index.ts`
+- `src/gateway/method-scopes.ts`
+- `src/gateway/server-methods-list.ts`
+- `apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
+- `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
+
+必须确认：
+
+- `chat.recallLatest` 仍然注册在 schema、method list、method scopes 和 protocol index 中，并且只移除最新 user turn 以及其后的 transcript entries。
+- recall 写 transcript 时必须使用 session write lock/原子写入，不能在 active run 未 settle 时截断正在写入的 transcript。
+- `sessions.create` 仍然支持 `reasoningLevel`、`verboseLevel` 和 `computerUse`，生成的 Swift GatewayModels 也必须同步包含这些字段。
+- `sessions.memoryFlush` 的 `wait` 参数仍然存在，调用方可选择等待 memory flush 完成。
+- `sessions.patch` 仍然保留 computer use config 和 client capability binding 的规范化/差异判断，不能把桌面能力绑定误清空。
+- session history HTTP 改动后仍然维持本地历史读取认证和 CORS 语义，不能与 `chat.history` 分叉。
+
+背景：
+
+- 这是 2026-05-02 为下游桌面 chat 编辑/撤回、session 创建参数透传、memory flush 等待和生成协议模型补充的本地协议增强。
+- 这类改动同时影响 gateway RPC、HTTP history、客户端生成模型和桌面 UI；同步上游 schema 时必须成套复核。
+
+### 17. OpenClaw-managed tool 注册、工具创建耗时与媒体工具模型配置
+
+涉及文件：
+
+- `src/agents/tool-create-timing.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-tools.ts`
+- `src/agents/pi-embedded-runner/run/attempt.tool-registration.test.ts`
+- `src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts`
+- `src/agents/tools/model-config.helpers.ts`
+- `src/agents/tools/image-generate-tool.ts`
+- `src/agents/tools/image-generate-tool.test.ts`
+- `src/agents/tools/image-tool.ts`
+- `src/agents/tools/music-generate-tool.ts`
+- `src/agents/tools/music-generate-tool.test.ts`
+- `src/agents/tools/pdf-tool.ts`
+- `src/agents/tools/video-generate-tool.ts`
+- `src/agents/tools/video-generate-tool.test.ts`
+- `src/plugins/tools.ts`
+- `src/plugins/capability-provider-runtime.ts`
+- `src/plugins/capability-provider-runtime.test.ts`
+
+必须确认：
+
+- OpenClaw-managed custom tools 仍然作为 Pi session 的 tool allowlist 传入，不能因为上游 tool catalog 改动导致 `sessions_spawn` 等本地工具未注册。
+- tool create timing 只记录慢路径并保持低开销，不能把日志记录放到每次工具执行热路径。
+- image/music/video/pdf 相关工具仍然能读取 model config helper 和 provider capability runtime，不能退回到硬编码 provider/model。
+- capability provider runtime 仍然能支持插件暴露的媒体能力，不能只保留核心 provider。
+
+背景：
+
+- 这是 2026-05-02 为多媒体工具、session 工具注册和首轮工具创建性能排查补充的本地能力。
+- 下游当前依赖 Pi session 明确知道 OpenClaw-managed tools；否则 agent 可见工具和实际 OpenClaw tool catalog 会分叉。
+
+### 18. Session memory hook、标题 slug 与 transcript event 兼容
+
+涉及文件：
+
+- `src/hooks/bundled/session-memory/handler.ts`
+- `src/hooks/bundled/session-memory/handler.test.ts`
+- `src/hooks/llm-slug-generator.ts`
+- `src/hooks/llm-slug-generator.test.ts`
+- `src/sessions/transcript-events.ts`
+- `src/sessions/transcript-events.test.ts`
+- `src/gateway/server-session-events.ts`
+- `src/gateway/server-startup-post-attach.ts`
+- `src/gateway/server-startup.test.ts`
+- `src/infra/heartbeat-runner.ts`
+- `src/infra/heartbeat-runner.ghost-reminder.test.ts`
+
+必须确认：
+
+- session-memory hook 仍然能处理当前 transcript event 结构，不能因为上游 transcript event schema 调整丢失 memory 写入。
+- LLM slug generator 仍然对标题/会话名生成保持稳定和可回退，不能把非法字符或空结果写入用户可见 session title。
+- `server-session-events` 和 startup post-attach 改动后，订阅事件仍然在 gateway 启动后正确挂载。
+- heartbeat ghost reminder 仍然按当前 session/event 状态触发，不能因为 startup 或 session event refactor 静默失效。
+
+背景：
+
+- 这是 2026-05-02 为 session memory、session title/slug 和 gateway session event 生命周期补充的本地检查点。
+- 这些路径通常不会被单个端到端测试完整覆盖，同步上游时必须至少跑相关单测并人工核查事件字段。
+
+### 19. Browser Use 工具、session 配置与桌面浏览器能力绑定
+
+涉及文件：
+
+- `src/browser-use/types.ts`
+- `src/browser-use/schema.ts`
+- `src/agents/tools/browser-use-tool.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-tools.ts`
+- `src/agents/tool-catalog.ts`
+- `src/agents/command/attempt-execution.ts`
+- `src/agents/pi-embedded-runner/run.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/run/params.ts`
+- `src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts`
+- `src/auto-reply/reply/agent-runner-utils.ts`
+- `src/auto-reply/reply/commands-system-prompt.ts`
+- `src/auto-reply/reply/followup-runner.ts`
+- `src/auto-reply/reply/get-reply-run.ts`
+- `src/auto-reply/reply/queue/types.ts`
+- `src/config/sessions/types.ts`
+- `src/gateway/protocol/schema/logs-chat.ts`
+- `src/gateway/protocol/schema/sessions.ts`
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/sessions.ts`
+- `src/gateway/session-utils.ts`
+- `src/gateway/session-utils.types.ts`
+- `src/gateway/sessions-patch.ts`
+
+必须确认：
+
+- `browser_use` 工具仍然通过 gateway `client.invoke` 调用桌面端 Browser Use host，不能退回成服务端直接执行浏览器自动化。
+- `BrowserUseSessionConfig` 仍然在 session entry、`RunEmbeddedPiAgentParams`、chat send extension、`sessions.create` 和 `sessions.patch` 中端到端透传。
+- `chat.send.extensions.browserUse` 和 `sessions.patch.browserUse` 仍然会写入 session 的 `browserUse` 配置，并在本地客户端有能力时写入 `clientCapabilityBindings.browser_use`。
+- `browser_use` 工具只在 session 配置启用时注册到 OpenClaw tool catalog / Pi tools，不能默认暴露给所有会话。
+- `browser_use` structured result 必须保持 `browser_use/v1`，并区分 `status/sessions/navigate/observe/click/double_click/type/scroll/wait/close` 动作。
+- element 操作必须要求 `ref` 或 `selector`，`type` 必须要求 `text`，不能把不完整动作透传给桌面 host。
+- `activation: required` 仍然能改变工具描述中的使用指令，保障用户显式选择 Browser Use 后 agent 优先使用该工具。
+- `followup`、queue 和 command execution 路径必须继续传递 `browserUse`，不能只覆盖普通 chat send 首轮。
+
+背景：
+
+- 这是 2026-05-02 为桌面端 Browser Use 集成补充的本地协议增强。
+- 下游当前依赖的是：
+  - gateway 只做能力路由和 session 绑定，不直接拥有浏览器执行环境。
+  - 桌面端 Browser Use host 通过 `client.invoke` 暴露浏览器状态、DOM observation 和动作执行。
+  - agent session 通过 `browserUse` 配置和 `clientCapabilityBindings.browser_use` 定向调用当前桌面客户端。
+- 如果上游后续改 tool catalog、session patch sanitizer、chat send extensions 或 client capability binding，同步后必须先人工复核这里。
+
+### 20. Interactive capability 结果分类、Computer Use 目标策略与 interrupted tool tail 修复
+
+涉及文件：
+
+- `src/interactive-capability/types.ts`
+- `src/browser-use/types.ts`
+- `src/browser-use/schema.ts`
+- `src/agents/tools/browser-use-tool.ts`
+- `src/agents/tools/browser-use-tool.test.ts`
+- `src/computer-use/types.ts`
+- `src/computer-use/schema.ts`
+- `src/agents/tools/computer-use-tool.ts`
+- `src/agents/tools/computer-use-tool.test.ts`
+- `src/agents/tools/computer-use/action-target-policy.ts`
+- `src/agents/tools/computer-use/schema.ts`
+- `src/agents/tools/computer-use/perception.ts`
+- `src/gateway/node-command-policy.ts`
+- `src/agents/interrupted-tool-tail-repair.ts`
+- `src/agents/main-session-restart-recovery.ts`
+- `src/agents/main-session-restart-recovery.test.ts`
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/chat.abort-persistence.test.ts`
+- `src/agents/openclaw-tools.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts`
+- `src/auto-reply/reply/commands-system-prompt.test.ts`
+- `src/auto-reply/reply/followup-runner.test.ts`
+
+必须确认：
+
+- Browser Use 和 Computer Use 仍然共享 interactive capability 的调用元数据语义，structured result 必须保留 `activation` 和 `source`，不能在工具执行后丢失桌面端能力来源。
+- Browser Use 对 gateway payload 的 `success / failed / approval_required / error` 分类仍然会映射成模型可读文本和结构化错误结果，不能把 host 返回的 observation、action payload 或审批状态吞掉。
+- Browser Use observation 文本仍然包含 title、URL、readable text 和 visible element refs；没有显式 `browserSessionId` 时仍然以当前 OpenClaw session key 作为 owner fallback。
+- Computer Use action target policy 仍然区分读取类命令和控制类动作；`computer.targets`、`computer.ocr`、`computer.cdp` 必须保持 read policy，`computer.action` 必须继续走 action policy 和审批语义。
+- Computer Use schema、types 和 agent tool 内部 schema 必须与 public session config 对齐，不能让 `activation`、`source` 或 target policy 字段在协议层和工具层分叉。
+- `chat.abort` 和 main session restart recovery 都必须在发现 transcript 尾部是未闭合 assistant tool call 时，追加 synthetic error tool result，避免会话因为缺失 tool result 无法继续。
+- interrupted tool tail 修复必须使用 session write lock，并且只修复 SessionManager transcript；非 SessionManager 或不可安全定位的 transcript 只能 warning 后跳过。
+- restart recovery 必须先把 transcript 修成 resumable tail 再恢复运行；如果 tail 仍不可恢复，不能强行继续。
+- abort partial 持久化仍然不能重复写入已经落盘的 assistant partial；即使没有 partial text，也要能补齐缺失的 tool result。
+
+背景：
+
+- 这是 2026-05-04 为桌面 interactive capability、Browser/Computer Use host 返回语义和 abort/restart 后 transcript 可恢复性补充的本地检查点。
+- 下游当前依赖的是：
+  - Browser Use 和 Computer Use 都由桌面 host 执行，agent 只通过 gateway capability binding 调用。
+  - host 返回的失败、审批和 observation 信息能稳定进入模型上下文，便于下一步纠错。
+  - 用户 abort 或 gateway restart 后，不会留下以 assistant tool call 结尾的坏 transcript。
+- 如果上游后续改 client.invoke payload、Computer Use command policy、Pi transcript replay、chat.abort 或 restart recovery，同步后必须先人工复核这里。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -496,6 +734,12 @@ rg -n "computer_use|client\\.invoke|clientCapabilityBindings|observation continu
 rg -n "SERPER_API_KEY|serperBaseUrl|braveMode|withTrustedWebToolsEndpoint|legacy-bundled-web-search" src/agents src/plugins src/flows
 rg -n "getApiKeyAndHeaders|sourceInfo\\.source|generateSummary\\(" src/agents
 rg -n "skillSettings|managedInstall|installOrigin|skills\\.uninstall|skills\\.import|resolveSkillConfig\\(" src/agents src/config src/gateway src/secrets
+rg -n "video-workflow|shouldResolveRuntimeModelBeforePiCatalog|externalAuth|external-cli" src/agents src/plugins src/utils
+rg -n "chat\\.recallLatest|validateChatRecallLatestParams|wait: Type\\.Optional|reasoningLevel|verboseLevel|computerUse" src/gateway apps/macos apps/shared
+rg -n "recordToolCreateTiming|logToolCreateTiming|customTools|sessions_spawn|capabilityProvider" src/agents src/plugins
+rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks src/sessions src/gateway src/infra
+rg -n "browser_use|BrowserUseSessionConfig|browserUse|clientCapabilityBindings\\.browser_use|browser.action|browser.observe" src/browser-use src/agents src/auto-reply src/config src/gateway
+rg -n "InteractiveCapability|activation|approval_required|action-target-policy|computer\\.targets|computer\\.ocr|computer\\.cdp|appendSyntheticInterruptedToolResults|isSessionTranscriptResumable" src/interactive-capability src/browser-use src/computer-use src/agents src/gateway
 ```
 
 ### D. 验证范围
@@ -516,6 +760,8 @@ pnpm test -- \
   src/agents/pi-embedded-runner/run/attempt.test.ts \
   src/agents/pi-embedded-runner/run/stream-selection.test.ts \
   src/agents/openai-ws-stream.test.ts \
+  src/agents/main-session-restart-recovery.test.ts \
+  src/agents/tools/browser-use-tool.test.ts \
   src/agents/tools/computer-use-tool.test.ts \
   src/agents/pi-embedded-runner/computer-use-observation-context.test.ts \
   src/agents/pi-embedded-runner/run.attempt-param-forwarding.test.ts \
@@ -534,7 +780,24 @@ pnpm test -- \
   src/gateway/server-methods/chat.directive-tags.test.ts \
   src/gateway/server-methods/chat.abort-persistence.test.ts \
   src/gateway/server-plugin-approval.e2e.test.ts \
-  src/scripts/canvas-a2ui-copy.test.ts
+  src/scripts/canvas-a2ui-copy.test.ts \
+  src/agents/pi-embedded-runner/run.runtime-model-fastpath.test.ts \
+  src/agents/pi-embedded-runner/run/attempt.tool-registration.test.ts \
+  src/agents/pi-embedded-runner/model.test.ts \
+  src/agents/auth-profiles.external-cli-sync.test.ts \
+  src/agents/model-fallback.test.ts \
+  src/agents/tools/image-generate-tool.test.ts \
+  src/agents/tools/music-generate-tool.test.ts \
+  src/agents/tools/video-generate-tool.test.ts \
+  src/gateway/sessions-patch.test.ts \
+  src/gateway/server-startup.test.ts \
+  src/hooks/bundled/session-memory/handler.test.ts \
+  src/hooks/llm-slug-generator.test.ts \
+  src/infra/heartbeat-runner.ghost-reminder.test.ts \
+  src/plugins/capability-provider-runtime.test.ts \
+  src/plugins/provider-runtime.test.ts \
+  src/sessions/transcript-events.test.ts \
+  src/utils/provider-utils.test.ts
 ```
 
 本地功能保留测试：

@@ -48,7 +48,6 @@ import {
   setSkillsRemoteRegistry,
 } from "../infra/skills-remote.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
@@ -115,10 +114,8 @@ import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
-import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
-import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
 import {
@@ -689,6 +686,7 @@ export async function startGatewayServer(
     httpServer,
     httpServers,
     httpBindHosts,
+    startListening,
     wss,
     preauthConnectionBudget,
     clients,
@@ -1299,6 +1297,8 @@ export async function startGatewayServer(
       broadcast,
       context: gatewayRequestContext,
     });
+    await startListening();
+    const { logGatewayStartup } = await import("./server-startup-log.js");
     logGatewayStartup({
       cfg: cfgAtStart,
       bindHost,
@@ -1310,24 +1310,28 @@ export async function startGatewayServer(
     });
     stopGatewayUpdateCheck = minimalTestGateway
       ? () => {}
-      : scheduleGatewayUpdateCheck({
-          cfg: cfgAtStart,
-          log,
-          isNixMode,
-          onUpdateAvailableChange: (updateAvailable) => {
-            const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-            broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-          },
-        });
+      : await import("../infra/update-startup.js").then(({ scheduleGatewayUpdateCheck }) =>
+          scheduleGatewayUpdateCheck({
+            cfg: cfgAtStart,
+            log,
+            isNixMode,
+            onUpdateAvailableChange: (updateAvailable) => {
+              const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+              broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+            },
+          }),
+        );
     tailscaleCleanup = minimalTestGateway
       ? null
-      : await startGatewayTailscaleExposure({
-          tailscaleMode,
-          resetOnExit: tailscaleConfig.resetOnExit,
-          port,
-          controlUiBasePath,
-          logTailscale,
-        });
+      : await import("./server-tailscale.js").then(({ startGatewayTailscaleExposure }) =>
+          startGatewayTailscaleExposure({
+            tailscaleMode,
+            resetOnExit: tailscaleConfig.resetOnExit,
+            port,
+            controlUiBasePath,
+            logTailscale,
+          }),
+        );
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {

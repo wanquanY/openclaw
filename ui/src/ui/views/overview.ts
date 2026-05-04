@@ -11,6 +11,7 @@ import type {
   AttentionItem,
   CronJob,
   CronStatus,
+  ModelAuthStatusResult,
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
@@ -21,8 +22,9 @@ import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
 import {
   resolveAuthHintKind,
+  type PairingHint,
+  resolvePairingHint,
   shouldShowInsecureContextHint,
-  shouldShowPairingHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
 
@@ -40,6 +42,7 @@ export type OverviewProps = {
   lastChannelsRefresh: number | null;
   warnQueryToken: boolean;
   // New dashboard data
+  modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
   sessionsResult: SessionsListResult | null;
   skillsReport: SkillStatusReport | null;
@@ -61,6 +64,31 @@ export type OverviewProps = {
   onRefreshLogs: () => void;
 };
 
+const PAIRING_HINT_COPY: Record<
+  PairingHint["kind"],
+  {
+    titleKey: string | null;
+    summaryKey: string | null;
+  }
+> = {
+  "pairing-required": {
+    titleKey: null,
+    summaryKey: null,
+  },
+  "scope-upgrade-pending": {
+    titleKey: "overview.pairing.scopeUpgradeTitle",
+    summaryKey: "overview.pairing.scopeUpgradeSummary",
+  },
+  "role-upgrade-pending": {
+    titleKey: "overview.pairing.roleUpgradeTitle",
+    summaryKey: "overview.pairing.roleUpgradeSummary",
+  },
+  "metadata-upgrade-pending": {
+    titleKey: "overview.pairing.metadataUpgradeTitle",
+    summaryKey: "overview.pairing.metadataUpgradeSummary",
+  },
+};
+
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
     | {
@@ -77,15 +105,24 @@ export function renderOverview(props: OverviewProps) {
   const isTrustedProxy = authMode === "trusted-proxy";
 
   const pairingHint = (() => {
-    if (!shouldShowPairingHint(props.connected, props.lastError, props.lastErrorCode)) {
+    const pairingState = resolvePairingHint(props.connected, props.lastError, props.lastErrorCode);
+    if (!pairingState) {
       return null;
     }
+    const copy = PAIRING_HINT_COPY[pairingState.kind];
+    const title = copy.titleKey ? t(copy.titleKey) : t("overview.pairing.hint");
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.pairing.hint")}
+        ${title}
+        ${copy.summaryKey
+          ? html`<div style="margin-top: 6px">${t(copy.summaryKey)}</div>`
+          : nothing}
         <div style="margin-top: 6px">
-          <span class="mono">openclaw devices list</span><br />
-          <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
+          ${pairingState.requestId
+            ? html`<span class="mono">openclaw devices approve ${pairingState.requestId}</span
+                ><br />`
+            : nothing}
+          <span class="mono">openclaw devices list</span>
         </div>
         <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
         <div style="margin-top: 6px">
@@ -94,8 +131,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Device pairing docs (opens in new tab)"
-            >Docs: Device pairing</a
+            title=${t("overview.pairing.docsTitle")}
+            >${t("overview.pairing.docsLink")}</a
           >
         </div>
       </div>
@@ -127,8 +164,8 @@ export function renderOverview(props: OverviewProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
-              title="Control UI auth docs (opens in new tab)"
-              >Docs: Control UI auth</a
+              title=${t("overview.connection.authDocsTitle")}
+              >${t("overview.connection.authDocsLink")}</a
             >
           </div>
         </div>
@@ -143,8 +180,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/dashboard"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title=${t("overview.connection.authDocsTitle")}
+            >${t("overview.connection.authDocsLink")}</a
           >
         </div>
       </div>
@@ -176,8 +213,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/gateway/tailscale"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Tailscale Serve docs (opens in new tab)"
-            >Docs: Tailscale Serve</a
+            title=${t("overview.connection.tailscaleDocsTitle")}
+            >${t("overview.connection.tailscaleDocsLink")}</a
           >
           <span class="muted"> · </span>
           <a
@@ -185,8 +222,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#insecure-http"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Insecure HTTP docs (opens in new tab)"
-            >Docs: Insecure HTTP</a
+            title=${t("overview.connection.insecureHttpDocsTitle")}
+            >${t("overview.connection.insecureHttpDocsLink")}</a
           >
         </div>
       </div>
@@ -237,10 +274,9 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${
-            isTrustedProxy
-              ? ""
-              : html`
+          ${isTrustedProxy
+            ? ""
+            : html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
@@ -259,8 +295,10 @@ export function renderOverview(props: OverviewProps) {
                       type="button"
                       class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
                       style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayToken ? "Hide token" : "Show token"}
-                      aria-label="Toggle token visibility"
+                      title=${props.showGatewayToken
+                        ? t("overview.access.hideToken")
+                        : t("overview.access.showToken")}
+                      aria-label=${t("overview.access.toggleTokenVisibility")}
                       aria-pressed=${props.showGatewayToken}
                       @click=${props.onToggleGatewayTokenVisibility}
                     >
@@ -280,14 +318,16 @@ export function renderOverview(props: OverviewProps) {
                         const v = (e.target as HTMLInputElement).value;
                         props.onPasswordChange(v);
                       }}
-                      placeholder="system or shared password"
+                      placeholder=${t("overview.access.passwordPlaceholder")}
                     />
                     <button
                       type="button"
                       class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
                       style="flex-shrink: 0; width: 36px; height: 36px; box-sizing: border-box;"
-                      title=${props.showGatewayPassword ? "Hide password" : "Show password"}
-                      aria-label="Toggle password visibility"
+                      title=${props.showGatewayPassword
+                        ? t("overview.access.hidePassword")
+                        : t("overview.access.showPassword")}
+                      aria-label=${t("overview.access.togglePasswordVisibility")}
                       aria-pressed=${props.showGatewayPassword}
                       @click=${props.onToggleGatewayPasswordVisibility}
                     >
@@ -295,8 +335,7 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-              `
-          }
+              `}
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
@@ -330,14 +369,13 @@ export function renderOverview(props: OverviewProps) {
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
           <span class="muted"
-            >${
-              isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
-            }</span
+            >${isTrustedProxy
+              ? t("overview.access.trustedProxy")
+              : t("overview.access.connectHint")}</span
           >
         </div>
-        ${
-          !props.connected
-            ? html`
+        ${!props.connected
+          ? html`
               <div class="login-gate__help" style="margin-top: 16px;">
                 <div class="login-gate__help-title">${t("overview.connection.title")}</div>
                 <ol class="login-gate__steps">
@@ -367,8 +405,7 @@ export function renderOverview(props: OverviewProps) {
                 </div>
               </div>
             `
-            : nothing
-        }
+          : nothing}
       </div>
 
       <div class="card">
@@ -392,27 +429,23 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${
-                props.lastChannelsRefresh
-                  ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                  : t("common.na")
-              }
+              ${props.lastChannelsRefresh
+                ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                : t("common.na")}
             </div>
           </div>
         </div>
-        ${
-          props.lastError
-            ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${props.lastError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
               ${queryTokenHint ?? ""}
             </div>`
-            : html`
+          : html`
               <div class="callout" style="margin-top: 14px">
                 ${t("overview.snapshot.channelsHint")}
               </div>
-            `
-        }
+            `}
       </div>
     </section>
 
@@ -424,6 +457,7 @@ export function renderOverview(props: OverviewProps) {
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
+      modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
     })}

@@ -1,3 +1,4 @@
+import type { BrowserUseSessionConfig } from "../browser-use/types.js";
 import type { ComputerUseSessionConfig } from "../computer-use/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -15,8 +16,10 @@ import {
 } from "./openclaw-tools.registration.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
+import { logToolCreateTiming, recordToolCreateTiming } from "./tool-create-timing.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createBrowserUseTool } from "./tools/browser-use-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerUseTool } from "./tools/computer-use-tool.js";
@@ -88,6 +91,7 @@ export function createOpenClawTools(
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
     computerUse?: ComputerUseSessionConfig;
+    browserUse?: BrowserUseSessionConfig;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -96,6 +100,8 @@ export function createOpenClawTools(
     requireExplicitMessageTarget?: boolean;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
+    /** If true, resolve expensive media tool model/provider configs only when the tool runs. */
+    deferMediaToolModelConfig?: boolean;
     /** If true, skip plugin tool resolution and return only shipped core tools. */
     disablePluginTools?: boolean;
     /** Trusted sender id from inbound context (not tool args). */
@@ -117,133 +123,183 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const startedAt = Date.now();
+  const timings: Record<string, number> = {};
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: options?.agentSessionKey,
-    config: resolvedConfig,
-    agentId: options?.requesterAgentIdOverride,
-  });
+  const { sessionAgentId } = recordToolCreateTiming(timings, "resolveAgentIdsMs", () =>
+    resolveSessionAgentIds({
+      sessionKey: options?.agentSessionKey,
+      config: resolvedConfig,
+      agentId: options?.requesterAgentIdOverride,
+    }),
+  );
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
   const inferredWorkspaceDir =
     options?.workspaceDir || !resolvedConfig
       ? undefined
       : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
-  const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
-  const spawnWorkspaceDir = resolveWorkspaceRoot(
-    options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
+  const { workspaceDir, spawnWorkspaceDir } = recordToolCreateTiming(
+    timings,
+    "workspaceResolveMs",
+    () => ({
+      workspaceDir: resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir),
+      spawnWorkspaceDir: resolveWorkspaceRoot(
+        options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
+      ),
+    }),
   );
-  const deliveryContext = normalizeDeliveryContext({
-    channel: options?.agentChannel,
-    to: options?.agentTo,
-    accountId: options?.agentAccountId,
-    threadId: options?.agentThreadId,
-  });
-  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const deliveryContext = recordToolCreateTiming(timings, "deliveryContextMs", () =>
+    normalizeDeliveryContext({
+      channel: options?.agentChannel,
+      to: options?.agentTo,
+      accountId: options?.agentAccountId,
+      threadId: options?.agentThreadId,
+    }),
+  );
+  const runtimeWebTools = recordToolCreateTiming(timings, "runtimeWebToolsMs", () =>
+    getActiveRuntimeWebToolsMetadata(),
+  );
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
-  const imageTool = options?.agentDir?.trim()
-    ? createImageTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        modelHasVision: options?.modelHasVision,
-      })
-    : null;
-  const imageGenerateTool = createImageGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
-  const videoGenerateTool = createVideoGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
-  const musicGenerateTool = createMusicGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
-  });
-  const pdfTool = options?.agentDir?.trim()
-    ? createPdfTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-      })
-    : null;
-  const webSearchTool = createWebSearchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebSearch: runtimeWebTools?.search,
-  });
-  const webFetchTool = createWebFetchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebFetch: runtimeWebTools?.fetch,
-  });
-  const messageTool = options?.disableMessageTool
-    ? null
-    : createMessageTool({
-        agentAccountId: options?.agentAccountId,
-        agentSessionKey: options?.agentSessionKey,
-        sessionId: options?.sessionId,
-        config: options?.config,
-        currentChannelId: options?.currentChannelId,
-        currentChannelProvider: options?.agentChannel,
-        currentThreadTs: options?.currentThreadTs,
-        currentMessageId: options?.currentMessageId,
-        replyToMode: options?.replyToMode,
-        hasRepliedRef: options?.hasRepliedRef,
-        sandboxRoot: options?.sandboxRoot,
-        requireExplicitTarget: options?.requireExplicitMessageTarget,
-        requesterSenderId: options?.requesterSenderId ?? undefined,
-        senderIsOwner: options?.senderIsOwner,
-      });
-  const nodesToolBase = createNodesTool({
-    agentSessionKey: options?.agentSessionKey,
-    agentChannel: options?.agentChannel,
-    agentAccountId: options?.agentAccountId,
-    currentChannelId: options?.currentChannelId,
-    currentThreadTs: options?.currentThreadTs,
-    config: options?.config,
-    modelHasVision: options?.modelHasVision,
-    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-  });
-  const nodesTool = applyNodesToolWorkspaceGuard(nodesToolBase, {
-    fsPolicy: options?.fsPolicy,
-    sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
-    sandboxRoot: options?.sandboxRoot,
-    workspaceDir,
+  const imageTool = recordToolCreateTiming(timings, "imageToolMs", () =>
+    options?.agentDir?.trim()
+      ? createImageTool({
+          config: options?.config,
+          agentDir: options.agentDir,
+          workspaceDir,
+          sandbox,
+          fsPolicy: options?.fsPolicy,
+          modelHasVision: options?.modelHasVision,
+          deferModelConfig: options?.deferMediaToolModelConfig,
+        })
+      : null,
+  );
+  const imageGenerateTool = recordToolCreateTiming(timings, "imageGenerateToolMs", () =>
+    createImageGenerateTool({
+      config: options?.config,
+      agentDir: options?.agentDir,
+      workspaceDir,
+      sandbox,
+      fsPolicy: options?.fsPolicy,
+      deferModelConfig: options?.deferMediaToolModelConfig,
+    }),
+  );
+  const videoGenerateTool = recordToolCreateTiming(timings, "videoGenerateToolMs", () =>
+    createVideoGenerateTool({
+      config: options?.config,
+      agentDir: options?.agentDir,
+      agentSessionKey: options?.agentSessionKey,
+      requesterOrigin: deliveryContext ?? undefined,
+      workspaceDir,
+      sandbox,
+      fsPolicy: options?.fsPolicy,
+      deferModelConfig: options?.deferMediaToolModelConfig,
+    }),
+  );
+  const musicGenerateTool = recordToolCreateTiming(timings, "musicGenerateToolMs", () =>
+    createMusicGenerateTool({
+      config: options?.config,
+      agentDir: options?.agentDir,
+      agentSessionKey: options?.agentSessionKey,
+      requesterOrigin: deliveryContext ?? undefined,
+      workspaceDir,
+      sandbox,
+      fsPolicy: options?.fsPolicy,
+      deferModelConfig: options?.deferMediaToolModelConfig,
+    }),
+  );
+  const pdfTool = recordToolCreateTiming(timings, "pdfToolMs", () =>
+    options?.agentDir?.trim()
+      ? createPdfTool({
+          config: options?.config,
+          agentDir: options.agentDir,
+          workspaceDir,
+          sandbox,
+          fsPolicy: options?.fsPolicy,
+          deferModelConfig: options?.deferMediaToolModelConfig,
+        })
+      : null,
+  );
+  const webSearchTool = recordToolCreateTiming(timings, "webSearchToolMs", () =>
+    createWebSearchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+      runtimeWebSearch: runtimeWebTools?.search,
+    }),
+  );
+  const webFetchTool = recordToolCreateTiming(timings, "webFetchToolMs", () =>
+    createWebFetchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+      runtimeWebFetch: runtimeWebTools?.fetch,
+    }),
+  );
+  const messageTool = recordToolCreateTiming(timings, "messageToolMs", () =>
+    options?.disableMessageTool
+      ? null
+      : createMessageTool({
+          agentAccountId: options?.agentAccountId,
+          agentSessionKey: options?.agentSessionKey,
+          sessionId: options?.sessionId,
+          config: options?.config,
+          currentChannelId: options?.currentChannelId,
+          currentChannelProvider: options?.agentChannel,
+          currentThreadTs: options?.currentThreadTs,
+          currentMessageId: options?.currentMessageId,
+          replyToMode: options?.replyToMode,
+          hasRepliedRef: options?.hasRepliedRef,
+          sandboxRoot: options?.sandboxRoot,
+          requireExplicitTarget: options?.requireExplicitMessageTarget,
+          requesterSenderId: options?.requesterSenderId ?? undefined,
+          senderIsOwner: options?.senderIsOwner,
+        }),
+  );
+  const nodesTool = recordToolCreateTiming(timings, "nodesToolMs", () => {
+    const nodesToolBase = createNodesTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
+      config: options?.config,
+      modelHasVision: options?.modelHasVision,
+      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+    });
+    return applyNodesToolWorkspaceGuard(nodesToolBase, {
+      fsPolicy: options?.fsPolicy,
+      sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
+      sandboxRoot: options?.sandboxRoot,
+      workspaceDir,
+    });
   });
   logVerbose(
-    `computer_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+    `computer_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} activation=${options?.computerUse?.activation ?? "n/a"} source=${options?.computerUse?.source ?? "n/a"} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
   );
   defaultRuntime.log?.(
-    `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
+    `[computer_use_trace] stage=openclaw_tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.computerUse?.enabled === true} activation=${options?.computerUse?.activation ?? "n/a"} source=${options?.computerUse?.source ?? "n/a"} scope=${options?.computerUse?.scope?.type ?? "n/a"} modelPolicy=${options?.computerUse?.modelPolicy?.mode ?? "n/a"}`,
   );
-  const tools: AnyAgentTool[] = [
+  logVerbose(
+    `browser_use tools session=${options?.agentSessionKey ?? "n/a"} enabled=${options?.browserUse?.enabled === true} activation=${options?.browserUse?.activation ?? "n/a"} source=${options?.browserUse?.source ?? "n/a"} hostPolicy=${options?.browserUse?.hostPolicy ?? "n/a"}`,
+  );
+  const tools: AnyAgentTool[] = recordToolCreateTiming(timings, "coreToolsArrayMs", () => [
     createCanvasTool({ config: options?.config }),
     ...(options?.computerUse?.enabled
       ? [
           createComputerUseTool({
             sessionConfig: options.computerUse,
+            sessionKey: options?.agentSessionKey,
+            agentId: sessionAgentId,
+            config: options?.config,
+          }),
+        ]
+      : []),
+    ...(options?.browserUse?.enabled
+      ? [
+          createBrowserUseTool({
+            sessionConfig: options.browserUse,
             sessionKey: options?.agentSessionKey,
             agentId: sessionAgentId,
             config: options?.config,
@@ -322,19 +378,36 @@ export function createOpenClawTools(
       sandboxed: options?.sandboxed,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
-  ];
+  ]);
 
   if (options?.disablePluginTools) {
+    logToolCreateTiming({
+      label: "createOpenClawTools",
+      sessionKey: options?.agentSessionKey,
+      totalMs: Date.now() - startedAt,
+      toolCount: tools.length,
+      timings,
+    });
     return tools;
   }
 
-  const wrappedPluginTools = resolveOpenClawPluginToolsForOptions({
-    options,
-    resolvedConfig,
-    existingToolNames: new Set(tools.map((tool) => tool.name)),
-  });
+  const wrappedPluginTools = recordToolCreateTiming(timings, "pluginToolsMs", () =>
+    resolveOpenClawPluginToolsForOptions({
+      options,
+      resolvedConfig,
+      existingToolNames: new Set(tools.map((tool) => tool.name)),
+    }),
+  );
 
-  return [...tools, ...wrappedPluginTools];
+  const allTools = [...tools, ...wrappedPluginTools];
+  logToolCreateTiming({
+    label: "createOpenClawTools",
+    sessionKey: options?.agentSessionKey,
+    totalMs: Date.now() - startedAt,
+    toolCount: allTools.length,
+    timings,
+  });
+  return allTools;
 }
 
 export const __testing = {

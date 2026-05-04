@@ -42,6 +42,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
@@ -84,6 +85,7 @@ import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./sys
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
+    getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     nowMs?: () => number;
@@ -191,12 +193,18 @@ function resolveHeartbeatSession(
   }
 
   const forced = forcedSessionKey?.trim();
+  if (forced && isSubagentSessionKey(forced)) {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
   if (forced) {
     const forcedCandidate = toAgentStoreSessionKey({
       agentId: resolvedAgentId,
       requestKey: forced,
       mainKey: cfg.session?.mainKey,
     });
+    if (isSubagentSessionKey(forcedCandidate)) {
+      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    }
     const forcedCanonical = canonicalizeMainSessionAlias({
       cfg,
       agentId: resolvedAgentId,
@@ -230,6 +238,9 @@ function resolveHeartbeatSession(
     requestKey: trimmed,
     mainKey: cfg.session?.mainKey,
   });
+  if (isSubagentSessionKey(candidate)) {
+    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+  }
   const canonical = canonicalizeMainSessionAlias({
     cfg,
     agentId: resolvedAgentId,
@@ -514,7 +525,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(pendingEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
@@ -602,6 +613,13 @@ export async function runHeartbeatOnce(opts: {
     runSessionKey = isolatedKey;
     runStorePath = cronSession.storePath;
   }
+  const activeSessionPendingEventEntries =
+    runSessionKey === sessionKey
+      ? preflight.pendingEventEntries
+      : peekSystemEventEntries(runSessionKey);
+  const hasUntrustedPendingEvents =
+    preflight.shouldInspectPendingEvents &&
+    activeSessionPendingEventEntries.some((event) => event.trusted === false);
 
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
@@ -661,6 +679,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
+    ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -731,7 +750,8 @@ export async function runHeartbeatOnce(opts: {
           bootstrapContextMode,
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
-    const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    const resolveReplyFromConfig = opts.deps?.getReplyFromConfig ?? getReplyFromConfig;
+    const replyResult = await resolveReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
@@ -761,19 +781,24 @@ export async function runHeartbeatOnce(opts: {
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-    // The model should be responding with exec results, not ack tokens.
+    // For user-relayed exec completion events, don't skip even if the response
+    // looks like HEARTBEAT_OK. The model should be responding with exec results,
+    // not ack tokens. Internal-only exec events intentionally keep HEARTBEAT_OK
+    // as a silent ACK so their system prompt/ack turns never become user-visible
+    // transcript noise.
+    const shouldRelayExecCompletion = hasExecCompletion && canRelayToUser;
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
     // fall back to the original reply text.
     const execFallbackText =
-      hasExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
+      shouldRelayExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    const shouldSkipMain =
+      normalized.shouldSkip && !normalized.hasMedia && !shouldRelayExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

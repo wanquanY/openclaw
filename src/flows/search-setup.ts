@@ -7,6 +7,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import { createLegacySerperWebSearchProviderEntry } from "../legacy-serper-web-search-provider.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
@@ -24,6 +25,7 @@ type SearchConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>
 type MutableSearchConfig = SearchConfig & Record<string, unknown>;
 
 export type SearchProviderSetupOption = FlowOption & {
+  id?: SearchProvider;
   value: SearchProvider;
 };
 
@@ -54,6 +56,79 @@ const DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS = new Set<SearchProvider>([
   "serper",
   "tavily",
 ]);
+
+export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderSetupOption[] = [
+  { id: "brave", value: "brave", label: "Brave Search" },
+  { id: "firecrawl", value: "firecrawl", label: "Firecrawl" },
+  { id: "gemini", value: "gemini", label: "Google Gemini" },
+  { id: "grok", value: "grok", label: "Grok (xAI)" },
+  { id: "kimi", value: "kimi", label: "Moonshot / Kimi" },
+  { id: "perplexity", value: "perplexity", label: "Perplexity" },
+  { id: "serper", value: "serper", label: "Serper" },
+  { id: "tavily", value: "tavily", label: "Tavily" },
+];
+
+function isDefaultOnboardSearchProvider(id: string): id is SearchProvider {
+  return DEFAULT_ONBOARD_SEARCH_PROVIDER_IDS.has(id);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function ensureRecord(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (isRecord(current)) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
+
+function readLegacySearchProviderApiKey(config: OpenClawConfig, provider: SearchProvider): unknown {
+  const search = config.tools?.web?.search;
+  if (!search || typeof search !== "object") {
+    return undefined;
+  }
+  const legacyProviderConfig = (search as Record<string, unknown>)[provider];
+  if (!isRecord(legacyProviderConfig)) {
+    return undefined;
+  }
+  return legacyProviderConfig.apiKey;
+}
+
+function writeLegacySearchProviderApiKey(
+  configTarget: OpenClawConfig,
+  provider: SearchProvider,
+  value: unknown,
+): void {
+  const tools = ensureRecord(configTarget as Record<string, unknown>, "tools");
+  const web = ensureRecord(tools, "web");
+  const search = ensureRecord(web, "search");
+  const legacyProviderConfig = ensureRecord(search, provider);
+  legacyProviderConfig.apiKey = value;
+}
+
+function shouldMirrorLegacySearchProviderApiKey(
+  config: OpenClawConfig,
+  provider: SearchProvider,
+): boolean {
+  return (
+    provider === "grok" ||
+    hasConfiguredSecretInput(readLegacySearchProviderApiKey(config, provider))
+  );
+}
+
+function withLegacySerperSetupProvider(
+  providers: readonly PluginWebSearchProviderEntry[],
+): PluginWebSearchProviderEntry[] {
+  if (providers.some((provider) => provider.id === "serper")) {
+    return [...providers];
+  }
+  return [...providers, createLegacySerperWebSearchProviderEntry()];
+}
+
 export function listSearchProviderOptions(
   config?: OpenClawConfig,
 ): readonly PluginWebSearchProviderEntry[] {
@@ -61,8 +136,11 @@ export function listSearchProviderOptions(
 }
 
 function showsSearchProviderInSetup(
-  entry: Pick<PluginWebSearchProviderEntry, "onboardingScopes">,
+  entry: Pick<PluginWebSearchProviderEntry, "id" | "onboardingScopes">,
 ): boolean {
+  if (isDefaultOnboardSearchProvider(entry.id)) {
+    return entry.onboardingScopes?.includes("text-inference") ?? true;
+  }
   return entry.onboardingScopes?.includes("text-inference") ?? false;
 }
 
@@ -97,11 +175,13 @@ export function resolveSearchProviderSetupContributions(
   config?: OpenClawConfig,
 ): SearchProviderSetupContribution[] {
   const providers = sortWebSearchProviders(
-    resolvePluginWebSearchProviders({
-      config,
-      env: process.env,
-      mode: "setup",
-    }),
+    withLegacySerperSetupProvider(
+      resolvePluginWebSearchProviders({
+        config,
+        env: process.env,
+        mode: "setup",
+      }),
+    ),
   );
   return sortFlowContributionsByLabel(
     providers
@@ -138,15 +218,12 @@ function providerIsReady(
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const search = config.tools?.web?.search;
   const entry = resolveSearchProviderEntry(config, provider);
   const configuredValue = entry?.getConfiguredCredentialValue?.(config);
-  return (
-    configuredValue ??
-    (entry?.id === "brave"
-      ? entry.getCredentialValue(search as Record<string, unknown> | undefined)
-      : undefined)
-  );
+  if (hasConfiguredSecretInput(configuredValue)) {
+    return configuredValue;
+  }
+  return readLegacySearchProviderApiKey(config, provider) ?? configuredValue;
 }
 
 export function resolveExistingKey(
@@ -211,6 +288,9 @@ export function applySearchKey(
   };
   const next = applySearchProviderSelectionConfig(nextBase, providerEntry);
   providerEntry.setConfiguredCredentialValue?.(next, key);
+  if (shouldMirrorLegacySearchProviderApiKey(config, provider)) {
+    writeLegacySearchProviderApiKey(next, provider, key);
+  }
   return next;
 }
 
@@ -400,6 +480,7 @@ export async function runSearchSetupFlow(
       },
     ],
     initialValue: defaultProvider,
+    searchable: true,
   });
 
   if (choice === "__skip__") {

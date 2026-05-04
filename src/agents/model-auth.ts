@@ -27,6 +27,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import * as cliCredentials from "./cli-credentials.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -257,15 +258,17 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
     const providerConfig = resolveProviderConfig(config, params.provider);
-    return resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
-      config,
-      context: {
-        config,
+    return (
+      resolveProviderSyntheticAuthWithPlugin({
         provider: params.provider,
-        providerConfig,
-      },
-    });
+        config,
+        context: {
+          config,
+          provider: params.provider,
+          providerConfig,
+        },
+      }) ?? undefined
+    );
   };
 
   const directAuth = resolveFromConfig(params.cfg);
@@ -414,14 +417,17 @@ export async function resolveApiKeyForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
-   *  silently overridden by env/config credentials (e.g. ollama-local). */
+   *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
 
   if (profileId) {
-    const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+    const profileProviderRef = profileId.split(":", 1)[0] ?? provider;
+    const store =
+      params.store ??
+      ensureAuthProfileStore(params.agentDir, { providerRefs: [provider, profileProviderRef] });
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -491,7 +497,8 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const providerConfig = resolveProviderConfig(cfg, provider);
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ?? ensureAuthProfileStore(params.agentDir, { providerRefs: [provider] });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -618,7 +625,7 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const authStore = store ?? ensureAuthProfileStore();
+  const authStore = store ?? ensureAuthProfileStore(undefined, { providerRefs: [resolved] });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
     const modes = new Set(
@@ -650,6 +657,13 @@ export function resolveModelAuthMode(
   const envKey = resolveEnvApiKey(resolved);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+  }
+
+  if (
+    normalizeProviderId(resolved) === "codex" &&
+    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000 })
+  ) {
+    return "oauth";
   }
 
   if (hasUsableCustomProviderApiKey(cfg, resolved)) {
@@ -685,7 +699,8 @@ export async function hasAvailableAuthForProvider(params: {
     return true;
   }
 
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ?? ensureAuthProfileStore(params.agentDir, { providerRefs: [provider] });
   const order = resolveAuthProfileOrder({
     cfg,
     store,

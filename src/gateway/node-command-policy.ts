@@ -21,14 +21,18 @@ const CANVAS_COMMANDS = [
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
+const SCREEN_COMMANDS = ["screen.snapshot"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const COMPUTER_USE_READ_COMMANDS = [
   "computer.status",
   "computer.displays",
   "computer.windows",
+  "computer.targets",
   "computer.capture",
   "computer.ax",
+  "computer.ocr",
+  "computer.cdp",
 ];
 const COMPUTER_USE_ACTION_COMMANDS = ["computer.action"];
 
@@ -122,6 +126,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     ...SYSTEM_COMMANDS,
+    ...SCREEN_COMMANDS,
   ],
   linux: [...COMPUTER_USE_READ_COMMANDS, ...COMPUTER_USE_ACTION_COMMANDS, ...SYSTEM_COMMANDS],
   windows: [...COMPUTER_USE_READ_COMMANDS, ...COMPUTER_USE_ACTION_COMMANDS, ...SYSTEM_COMMANDS],

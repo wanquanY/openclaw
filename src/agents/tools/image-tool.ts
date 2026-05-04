@@ -1,5 +1,5 @@
 import { resolve, isAbsolute } from "node:path";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveAutoMediaKeyProviders,
@@ -7,6 +7,10 @@ import {
 } from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import {
   describeImageWithModel,
@@ -19,6 +23,7 @@ import {
   coerceImageAssistantText,
   coerceImageModelConfig,
   decodeDataUrl,
+  hasImageReasoningOnlyResponse,
   type ImageModelConfig,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
@@ -26,6 +31,7 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   resolveMediaToolLocalRoots,
+  resolveRemoteMediaSsrfPolicy,
   resolvePromptAndModelOverride,
 } from "./media-tool-shared.js";
 import {
@@ -58,6 +64,7 @@ const imageToolProviderDeps = {
 export const __testing = {
   decodeDataUrl,
   coerceImageAssistantText,
+  hasImageReasoningOnlyResponse,
   resolveImageToolMaxTokens,
   setProviderDepsForTest(overrides?: {
     buildProviderRegistry?: typeof buildProviderRegistry;
@@ -285,6 +292,7 @@ export function createImageTool(options?: {
   fsPolicy?: ToolFsPolicy;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
+  deferModelConfig?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
@@ -294,13 +302,18 @@ export function createImageTool(options?: {
     }
     return null;
   }
-  const imageModelConfig = resolveImageModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-  });
+  const imageModelConfig = options?.deferModelConfig
+    ? null
+    : resolveImageModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+      });
   if (!imageModelConfig) {
-    return null;
+    if (!options?.deferModelConfig) {
+      return null;
+    }
   }
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
@@ -375,6 +388,17 @@ export function createImageTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const resolvedImageModelConfig =
+        imageModelConfig ??
+        resolveImageModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+        });
+      if (!resolvedImageModelConfig) {
+        throw new Error(
+          "No image model configured. Set agents.defaults.imageModel.primary to a vision-capable provider/model, or configure a vision provider first.",
+        );
+      }
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
@@ -402,17 +426,16 @@ export function createImageTool(options?: {
           throw new Error("image required (empty string in array)");
         }
 
+        const normalizedRef = normalizeMediaReferenceSource(imageRaw);
+
         // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
         // agent/model contexts, images can be referenced as pseudo-URIs like
         // `image:0` (e.g. "first image in the prompt"). We don't have access to a
         // shared image registry here, so fail gracefully instead of attempting to
         // `fs.readFile("image:0")` and producing a noisy ENOENT.
-        const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-        const isFileUrl = /^file:/i.test(imageRaw);
-        const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-        const isDataUrl = /^data:/i.test(imageRaw);
-        if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+        const refInfo = classifyMediaReferenceSource(normalizedRef);
+        const { isDataUrl, isFileUrl, isHttpUrl } = refInfo;
+        if (refInfo.hasUnsupportedScheme) {
           return {
             content: [
               {
@@ -433,10 +456,10 @@ export function createImageTool(options?: {
 
         const resolvedImage = (() => {
           if (sandboxConfig) {
-            return imageRaw;
+            return normalizedRef;
           }
-          if (imageRaw.startsWith("~")) {
-            return resolveUserPath(imageRaw);
+          if (normalizedRef.startsWith("~")) {
+            return resolveUserPath(normalizedRef);
           }
           // Resolve relative paths against workspaceDir so agents can reference
           // workspace-relative paths (e.g. "inbox/photo.png") without needing to
@@ -445,13 +468,13 @@ export function createImageTool(options?: {
             !isDataUrl &&
             !isFileUrl &&
             !isHttpUrl &&
-            !looksLikeWindowsDrivePath &&
-            !isAbsolute(imageRaw) &&
+            !refInfo.looksLikeWindowsDrivePath &&
+            !isAbsolute(normalizedRef) &&
             options?.workspaceDir
           ) {
-            return resolve(options.workspaceDir, imageRaw);
+            return resolve(options.workspaceDir, normalizedRef);
           }
-          return imageRaw;
+          return normalizedRef;
         })();
         const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
           ? { resolved: "" }
@@ -486,6 +509,7 @@ export function createImageTool(options?: {
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
+                ssrfPolicy: remoteMediaSsrfPolicy,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
@@ -509,7 +533,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
-        imageModelConfig,
+        imageModelConfig: resolvedImageModelConfig,
         modelOverride,
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
@@ -524,10 +548,12 @@ export function createImageTool(options?: {
                 : {}),
             }
           : {
-              images: loadedImages.map((img) => ({
-                image: img.resolvedImage,
-                ...(img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {}),
-              })),
+              images: loadedImages.map((img) =>
+                Object.assign(
+                  { image: img.resolvedImage },
+                  img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
+                ),
+              ),
             };
 
       return buildTextToolResult(result, imageDetails);

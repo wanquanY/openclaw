@@ -82,6 +82,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   readSessionPreviewItemsFromTranscript,
+  resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
@@ -102,6 +103,15 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
+
+let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+
+function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
+  sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
+  return sessionsRuntimeModulePromise;
+}
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
   const raw =
@@ -243,7 +253,7 @@ function emitSessionsChanged(
 }
 
 function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete";
+  action: "patch" | "delete" | "compact" | "restore";
   client: GatewayClient | null;
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
   respond: RespondFn;
@@ -482,7 +492,20 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { entry, canonicalKey, storePath } = loadSessionEntry(key);
+  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
+  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
+  if (deletedAgentId !== null) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `Agent "${deletedAgentId}" no longer exists in configuration`,
+      ),
+    );
+    return;
+  }
   if (!entry?.sessionId) {
     params.respond(
       false,
@@ -891,6 +914,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
+    const computerUseBinding =
+      p.computerUse && typeof p.computerUse === "object" && !Array.isArray(p.computerUse)
+        ? buildSessionClientCapabilityBindingFromClient({
+            client,
+            capability: "computer_use",
+          })
+        : undefined;
+    const browserUseBinding =
+      p.browserUse && typeof p.browserUse === "object" && !Array.isArray(p.browserUse)
+        ? buildSessionClientCapabilityBindingFromClient({
+            client,
+            capability: "browser_use",
+          })
+        : undefined;
     const created = await updateSessionStore(target.storePath, async (store) => {
       const patched = await applySessionsPatchToStore({
         cfg,
@@ -903,9 +940,49 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           threadId: normalizeOptionalString(p.threadId),
           title: normalizeOptionalString(p.title),
           titleLocked: typeof p.titleLocked === "boolean" ? p.titleLocked : undefined,
+          reasoningLevel: normalizeOptionalString(p.reasoningLevel),
+          verboseLevel: normalizeOptionalString(p.verboseLevel),
+          computerUse:
+            p.computerUse && typeof p.computerUse === "object" && !Array.isArray(p.computerUse)
+              ? p.computerUse
+              : undefined,
+          browserUse:
+            p.browserUse && typeof p.browserUse === "object" && !Array.isArray(p.browserUse)
+              ? p.browserUse
+              : undefined,
         },
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
+      if (
+        patched.ok &&
+        p.computerUse &&
+        typeof p.computerUse === "object" &&
+        !Array.isArray(p.computerUse)
+      ) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: patched.entry,
+          capability: "computer_use",
+          binding: computerUseBinding,
+          enabled: patched.entry.computerUse?.enabled === true,
+        });
+        patched.entry = nextEntry;
+        store[target.canonicalKey] = nextEntry;
+      }
+      if (
+        patched.ok &&
+        p.browserUse &&
+        typeof p.browserUse === "object" &&
+        !Array.isArray(p.browserUse)
+      ) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: patched.entry,
+          capability: "browser_use",
+          binding: browserUseBinding,
+          enabled: patched.entry.browserUse?.enabled === true,
+        });
+        patched.entry = nextEntry;
+        store[target.canonicalKey] = nextEntry;
+      }
       if (!patched.ok || !canonicalParentSessionKey) {
         return patched;
       }
@@ -1151,6 +1228,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    if (rejectWebchatSessionMutation({ action: "restore", client, isWebchatConnect, respond })) {
+      return;
+    }
     const checkpointId =
       typeof p.checkpointId === "string" && p.checkpointId.trim() ? p.checkpointId.trim() : "";
     if (!checkpointId) {
@@ -1348,6 +1428,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           capability: "computer_use",
         })
       : undefined;
+    const browserUseBinding = Object.prototype.hasOwnProperty.call(p, "browserUse")
+      ? buildSessionClientCapabilityBindingFromClient({
+          client,
+          capability: "browser_use",
+        })
+      : undefined;
     const applied = await updateSessionStore(storePath, async (store) => {
       const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
       const result = await applySessionsPatchToStore({
@@ -1363,6 +1449,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           capability: "computer_use",
           binding: computerUseBinding,
           enabled: result.entry.computerUse?.enabled === true,
+        });
+        result.entry = nextEntry;
+        store[primaryKey] = nextEntry;
+      }
+      if (result.ok && Object.prototype.hasOwnProperty.call(p, "browserUse")) {
+        const nextEntry = applySessionClientCapabilityBinding({
+          entry: result.entry,
+          capability: "browser_use",
+          binding: browserUseBinding,
+          enabled: result.entry.browserUse?.enabled === true,
         });
         result.entry = nextEntry;
         store[primaryKey] = nextEntry;
@@ -1410,7 +1506,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-  "sessions.memory.flush": async ({ params, respond }) => {
+  "sessions.memory.flush": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -1440,9 +1536,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       previousSessionEntry: entry,
       commandSource: "gateway:sessions.memory.flush",
       throwOnError: true,
+      skipLlmSlug: p.wait === false,
     };
 
-    try {
+    const runFlush = async () => {
       const hookEvent = createInternalHookEvent(
         "command",
         "new",
@@ -1450,9 +1547,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         eventContext,
       );
       await saveSessionToMemory(hookEvent);
-      const details = hookEvent.context.sessionMemoryResult as
+      return hookEvent.context.sessionMemoryResult as
         | { path?: string; filename?: string }
         | undefined;
+    };
+
+    if (p.wait === false) {
+      const resolvedKey = target.canonicalKey ?? key;
+      void runFlush().catch((error) => {
+        context.logGateway.warn(
+          `background session memory flush failed for ${resolvedKey}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+      respond(
+        true,
+        {
+          ok: true,
+          key: resolvedKey,
+          status: "queued",
+        },
+        undefined,
+      );
+      return;
+    }
+
+    try {
+      const details = await runFlush();
       respond(
         true,
         {
@@ -1486,7 +1606,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
-    const { performGatewaySessionReset } = await import("./sessions.runtime.js");
+    const { performGatewaySessionReset } = await loadSessionsRuntimeModule();
     const result = await performGatewaySessionReset({
       key,
       reason,
@@ -1532,7 +1652,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
-    } = await import("./sessions.runtime.js");
+    } = await loadSessionsRuntimeModule();
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const mutationCleanupError = await cleanupSessionBeforeMutation({
@@ -1627,6 +1747,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
+      return;
+    }
 
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
@@ -1703,6 +1826,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         config: cfg,
         provider: resolvedModel.provider,
         model: resolvedModel.model,
+        agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
         thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
         reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
         bashElevated: {

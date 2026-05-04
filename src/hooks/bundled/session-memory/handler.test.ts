@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { createHookEvent } from "../../hooks.js";
+import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
   findPreviousSessionFile,
   getRecentSessionContent,
@@ -71,6 +72,7 @@ async function runNewWithPreviousSessionEntry(params: {
   action?: "new" | "reset";
   sessionKey?: string;
   workspaceDirOverride?: string;
+  skipLlmSlug?: boolean;
 }): Promise<{ files: string[]; memoryContent: string }> {
   const event = createHookEvent(
     "command",
@@ -83,6 +85,7 @@ async function runNewWithPreviousSessionEntry(params: {
           agents: { defaults: { workspace: params.tempDir } },
         } satisfies OpenClawConfig),
       previousSessionEntry: params.previousSessionEntry,
+      ...(params.skipLlmSlug ? { skipLlmSlug: true } : {}),
       ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
     },
   );
@@ -230,6 +233,35 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("uses a deterministic slug when interactive background flush asks to skip LLM slugging", async () => {
+    vi.mocked(generateSlugViaLLM).mockClear();
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "This content would normally produce an LLM slug" },
+        { role: "assistant", content: "Stored without competing for model capacity" },
+      ]),
+    });
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      skipLlmSlug: true,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+      },
+    });
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+    expect(memoryContent).toContain("This content would normally produce an LLM slug");
+    expect(generateSlugViaLLM).not.toHaveBeenCalled();
   });
 
   it("creates memory file with session content on /reset command", async () => {

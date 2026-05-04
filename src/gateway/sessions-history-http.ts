@@ -286,6 +286,19 @@ export async function handleSessionHistoryHttpRequest(
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }
+    if (update.operation === "recall") {
+      sseState.refresh();
+      sseWrite(res, "recall", {
+        sessionKey: target.canonicalKey,
+        ...(typeof update.recalledMessageId === "string"
+          ? { messageId: update.recalledMessageId }
+          : {}),
+        removedEntries: update.removedEntries ?? 0,
+        removedMessages: update.removedMessages ?? 0,
+        abortedRunIds: update.abortedRunIds ?? [],
+      });
+      return;
+    }
     if (update.message !== undefined) {
       if (limit === undefined && cursor === undefined) {
         const nextEvent = sseState.appendInlineMessage({

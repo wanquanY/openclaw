@@ -1,13 +1,11 @@
 ---
-title: "Dreaming (experimental)"
 summary: "Background memory consolidation with light, deep, and REM phases plus a Dream Diary"
+title: "Dreaming"
 read_when:
   - You want memory promotion to run automatically
   - You want to understand what each dreaming phase does
   - You want to tune consolidation without polluting MEMORY.md
 ---
-
-# Dreaming (experimental)
 
 Dreaming is the background memory consolidation system in `memory-core`.
 It helps OpenClaw move strong short-term signals into durable memory while
@@ -215,7 +213,7 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 Phase policy, thresholds, and storage behavior are internal implementation
 details (not user-facing config).
 
-See [Memory configuration reference](/reference/memory-config#dreaming-experimental)
+See [Memory configuration reference](/reference/memory-config#dreaming)
 for the full key list.
 
 ## Dreams UI

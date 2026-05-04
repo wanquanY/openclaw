@@ -304,15 +304,13 @@ function setResolvedWebSearchApiKey(params: {
   provider: PluginWebSearchProviderEntry;
   value: string;
 }): void {
+  if (params.provider.setConfiguredCredentialValue) {
+    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
+    return;
+  }
   const tools = ensureObject(params.resolvedConfig as Record<string, unknown>, "tools");
   const web = ensureObject(tools, "web");
   const search = ensureObject(web, "search");
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    if (params.provider.id !== "brave") {
-      return;
-    }
-  }
   params.provider.setCredentialValue(search, params.value);
 }
 
@@ -336,11 +334,15 @@ function ensureLegacySerperWebSearchProvider(params: {
     : undefined;
   const serperConfig = isRecord(search?.serper) ? search.serper : undefined;
   const wantsLegacySerper =
-    params.configuredBundledPluginId === "serper"
-    || Boolean(params.onlyPluginIds?.some((pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === "serper"))
-    || normalizeLowercaseStringOrEmpty(search?.provider) === "serper"
-    || hasNonEmptyStringValue(serperConfig?.apiKey)
-    || hasNonEmptyStringValue(params.env.SERPER_API_KEY);
+    params.configuredBundledPluginId === "serper" ||
+    Boolean(
+      params.onlyPluginIds?.some(
+        (pluginId) => normalizeLowercaseStringOrEmpty(pluginId) === "serper",
+      ),
+    ) ||
+    normalizeLowercaseStringOrEmpty(search?.provider) === "serper" ||
+    hasNonEmptyStringValue(serperConfig?.apiKey) ||
+    hasNonEmptyStringValue(params.env.SERPER_API_KEY);
 
   if (!wantsLegacySerper) {
     return params.providers;
@@ -474,8 +476,7 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  const configuredValue = params.provider.getConfiguredCredentialValue?.(params.config);
-  return configuredValue ?? params.provider.getCredentialValue(params.search);
+  return params.provider.getConfiguredCredentialValue?.(params.config);
 }
 
 function inactivePathsForProvider(provider: PluginWebSearchProviderEntry): string[] {
@@ -600,43 +601,24 @@ export async function resolveRuntimeWebTools(params: {
   }
   const rawProvider = normalizeLowercaseStringOrEmpty(search?.provider);
   let configuredBundledWebSearchPluginIdHint: string | undefined;
-  if (rawProvider && hasPluginWebSearchConfig) {
-    configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
-      config: params.sourceConfig,
-      key: "webSearch",
-      pluginId: rawProvider,
-    });
-    if (!configuredBundledWebSearchPluginIdHint && !(await getHasCustomWebSearchRisk())) {
-      configuredBundledWebSearchPluginIdHint = inferSingleBundledPluginScopedWebToolConfigOwner(
-        params.sourceConfig,
-        "webSearch",
-      );
+  if (hasPluginWebSearchConfig && !(await getHasCustomWebSearchRisk())) {
+    if (rawProvider) {
+      configuredBundledWebSearchPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
+        config: params.sourceConfig,
+        key: "webSearch",
+        pluginId: rawProvider,
+      });
     }
+    configuredBundledWebSearchPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
+      params.sourceConfig,
+      "webSearch",
+    );
   }
   const searchMetadata: RuntimeWebSearchMetadata = {
     providerSource: "none",
     diagnostics: [],
   };
   if (search || hasPluginWebSearchConfig) {
-    let searchCompatibilityOnlyPluginIds: string[] = [];
-    if (
-      !rawProvider &&
-      !hasPluginWebSearchConfig &&
-      isRecord(search) &&
-      Object.prototype.hasOwnProperty.call(search, "apiKey")
-    ) {
-      const { resolveManifestContractPluginIdsByCompatibilityRuntimePath } =
-        await loadRuntimeWebToolsManifest();
-      searchCompatibilityOnlyPluginIds = resolveManifestContractPluginIdsByCompatibilityRuntimePath(
-        {
-          contract: "webSearchProviders",
-          path: "tools.web.search.apiKey",
-          origin: "bundled",
-          config: params.sourceConfig,
-          env,
-        },
-      );
-    }
     const searchSurface = await resolveRuntimeWebProviderSurface({
       contract: "webSearchProviders",
       rawProvider,
@@ -653,12 +635,6 @@ export async function resolveRuntimeWebTools(params: {
           sourceConfig: params.sourceConfig,
           context: params.context,
           configuredBundledPluginId,
-          onlyPluginIds:
-            configuredBundledPluginId === undefined &&
-            searchCompatibilityOnlyPluginIds.length > 0 &&
-            !(await getHasCustomWebSearchRisk())
-              ? searchCompatibilityOnlyPluginIds
-              : undefined,
           hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
         }),
       sortProviders: sortWebSearchProvidersForAutoDetect,

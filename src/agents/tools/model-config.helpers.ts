@@ -1,6 +1,7 @@
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  resolveAgentModelTimeoutMsValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,7 +14,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
-export type ToolModelConfig = { primary?: string; fallbacks?: string[] };
+export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
 
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
   return Boolean(
@@ -46,6 +47,7 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
   }
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
+    providerRefs: [params.provider],
   });
   return listProfilesForProvider(store, params.provider).length > 0;
 }
@@ -53,9 +55,11 @@ export function hasAuthForProvider(params: { provider: string; agentDir?: string
 export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
+  const timeoutMs = resolveAgentModelTimeoutMsValue(model);
   return {
     ...(primary?.trim() ? { primary: primary.trim() } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   };
 }
 
@@ -94,5 +98,6 @@ export function buildToolModelConfigFromCandidates(params: {
   return {
     primary: deduped[0],
     ...(deduped.length > 1 ? { fallbacks: deduped.slice(1) } : {}),
+    ...(params.explicit.timeoutMs !== undefined ? { timeoutMs: params.explicit.timeoutMs } : {}),
   };
 }

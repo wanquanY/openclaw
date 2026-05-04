@@ -1,8 +1,9 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type DeliverableMessageChannel,
@@ -20,10 +21,13 @@ export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
 ): DeliverableMessageChannel | undefined {
   const normalized = normalizeMessageChannel(raw);
-  if (!normalized || !isDeliverableMessageChannel(normalized)) {
+  if (!normalized || normalized === INTERNAL_MESSAGE_CHANNEL) {
     return undefined;
   }
-  return normalized;
+  if (isDeliverableMessageChannel(normalized)) {
+    return normalized;
+  }
+  return normalized as DeliverableMessageChannel;
 }
 
 function maybeBootstrapChannelPlugin(params: {
@@ -58,16 +62,17 @@ export function resolveOutboundChannelPlugin(params: {
     return undefined;
   }
 
+  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
-  const current = resolve();
-  if (current) {
-    return current;
-  }
   const directCurrent = resolveDirectFromActiveRegistry(normalized);
   if (directCurrent) {
     return directCurrent;
   }
+  const current = resolveLoaded();
+  if (current) {
+    return current;
+  }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolve() ?? resolveDirectFromActiveRegistry(normalized);
+  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
 }

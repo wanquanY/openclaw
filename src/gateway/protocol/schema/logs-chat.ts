@@ -1,4 +1,5 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { BrowserUseSessionConfigSchema } from "../../../browser-use/schema.js";
 import { ComputerUseSessionConfigSchema } from "../../../computer-use/schema.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 
@@ -52,6 +53,7 @@ export const ChatSendParamsSchema = Type.Object(
       Type.Object(
         {
           computerUse: Type.Optional(ComputerUseSessionConfigSchema),
+          browserUse: Type.Optional(BrowserUseSessionConfigSchema),
         },
         { additionalProperties: false },
       ),
@@ -65,6 +67,13 @@ export const ChatAbortParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     runId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ChatRecallLatestParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
   },
   { additionalProperties: false },
 );

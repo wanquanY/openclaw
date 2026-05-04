@@ -17,6 +17,7 @@ vi.mock("./gateway.js", () => ({
 const SESSION_CONFIG: ComputerUseSessionConfig = {
   enabled: true,
   mode: "plan_and_act",
+  activation: "required",
   scope: { type: "current_window" },
   hostPolicy: "local_only",
   modelPolicy: { mode: "planner_executor_split" },
@@ -458,8 +459,15 @@ describe("computer_use tool", () => {
     });
     expect(result.content).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: "text", text: expect.stringContaining("Candidates:") }),
-        expect.objectContaining({ type: "image", mimeType: "image/png", data: PNG_BASE64 }),
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Candidates:"),
+        }),
+        expect.objectContaining({
+          type: "image",
+          mimeType: "image/png",
+          data: PNG_BASE64,
+        }),
       ]),
     );
   });
@@ -919,7 +927,9 @@ describe("computer_use tool", () => {
       });
 
     const tool = buildTool();
-    await tool.execute("tool-ref-relocate-observe-1", { action: "observe" } as never);
+    await tool.execute("tool-ref-relocate-observe-1", {
+      action: "observe",
+    } as never);
     const result = await tool.execute("tool-ref-relocate-action-1", {
       action: "click",
       elementRef: "@e1",
@@ -1213,6 +1223,136 @@ describe("computer_use tool", () => {
     });
   });
 
+  it("observes the focused window by default for keyboard text entry under full-desktop sessions", async () => {
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        payload: {
+          observeAllowed: true,
+          controlAllowed: true,
+        },
+      })
+      .mockImplementationOnce(async (_method: string, _gatewayOpts: unknown, params: unknown) => {
+        expect(params).toMatchObject({
+          command: "computer.capture",
+          params: {
+            scopeType: "current_window",
+          },
+        });
+        return {
+          payload: {
+            scopeType: "window",
+            targetKind: "window",
+            targetId: "window:win-wechat",
+            observationId: "obs-focused-type-1",
+            backend: "screen_capture_kit",
+            appName: "微信",
+            bundleId: "com.tencent.xinWeChat",
+            windowId: "win-wechat",
+            windowTitle: "微信",
+            width: 900,
+            height: 640,
+            mimeType: "image/png",
+            base64Png: PNG_BASE64,
+            capturedAt: "2026-04-22T00:02:10Z",
+            diagnostics: {
+              capture: {
+                backend: "screen_capture_kit",
+                scopeType: "window",
+                targetKind: "window",
+                targetId: "window:win-wechat",
+                observationId: "obs-focused-type-1",
+                frameSize: { width: 900, height: 640 },
+                globalRect: { x: 100, y: 200, width: 900, height: 640 },
+              },
+            },
+          },
+        };
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          supported: true,
+          permissionState: "granted",
+          targetKind: "window",
+          targetId: "window:win-wechat",
+          observationId: "obs-focused-type-1",
+          windowId: "win-wechat",
+          appName: "微信",
+          targetMatched: true,
+          nodes: [
+            {
+              id: "0",
+              role: "AXWindow",
+              label: "微信",
+              children: [
+                {
+                  id: "0.0",
+                  role: "AXTextField",
+                  label: "搜索",
+                  editable: true,
+                  rect: { x: 20, y: 20, width: 360, height: 36 },
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      })
+      .mockImplementationOnce(async (_method: string, _gatewayOpts: unknown, params: unknown) => {
+        expect(params).toMatchObject({
+          command: "computer.action",
+          params: {
+            action: "type",
+            targetId: "window:win-wechat",
+            windowId: "win-wechat",
+            observationId: "obs-focused-type-1",
+            text: "李梓迟",
+          },
+        });
+        return {
+          payload: {
+            action: "type",
+            status: "success",
+            targetId: "window:win-wechat",
+            windowId: "win-wechat",
+            executedAt: "2026-04-22T00:02:11Z",
+            textLength: 3,
+            inputBackend: "ax_set_value",
+            diagnostics: {
+              action: {
+                scopeType: "window",
+                targetKind: "window",
+                targetId: "window:win-wechat",
+                observationId: "obs-focused-type-1",
+                mappingSource: "observation_binding",
+                inputBackend: "ax_set_value",
+              },
+            },
+          },
+        };
+      });
+
+    const result = await buildTool({
+      ...SESSION_CONFIG,
+      scope: { type: "full_desktop" },
+      approvals: { highRiskActionsRequireConfirm: false },
+    }).execute("tool-focused-type-1", {
+      action: "type",
+      elementRef: "@e0",
+      text: "李梓迟",
+      verifyAfterAction: false,
+    } as never);
+
+    expect(result).toMatchObject({
+      details: {
+        observation: {
+          targetKind: "window",
+          targetId: "window:win-wechat",
+          windowId: "win-wechat",
+        },
+      },
+    });
+  });
+
   it("sends set_text_submit as one grounded transaction for search/open flows", async () => {
     gatewayMocks.callGatewayTool
       .mockResolvedValueOnce({
@@ -1420,7 +1560,12 @@ describe("computer_use tool", () => {
       id: `ocr:watermark:${index}`,
       text: "杨万权 5106",
       confidence: 0.97,
-      rect: { x: 150 + index * 90, y: 120 + index * 36, width: 130, height: 28 },
+      rect: {
+        x: 150 + index * 90,
+        y: 120 + index * 36,
+        width: 130,
+        height: 28,
+      },
     }));
     const candidates = buildCandidateProposals({
       limit: 6,
@@ -1566,7 +1711,9 @@ describe("computer_use tool", () => {
       })
       .mockResolvedValueOnce(OBSERVE_OCR_PAYLOAD);
 
-    const result = await buildTool().execute("tool-ocr-1", { action: "observe" } as never);
+    const result = await buildTool().execute("tool-ocr-1", {
+      action: "observe",
+    } as never);
 
     expect(result).toMatchObject({
       details: {
@@ -1941,6 +2088,43 @@ describe("computer_use tool", () => {
     });
   });
 
+  it("does not request CDP perception when the host status does not advertise CDP", async () => {
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        payload: {
+          observeAllowed: true,
+          controlAllowed: true,
+          supportsCdp: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          scopeType: "window",
+          targetKind: "window",
+          targetId: "window:win-1",
+          observationId: "obs-no-cdp-1",
+          backend: "screen_capture_kit",
+          appName: "Editor",
+          windowId: "win-1",
+          windowTitle: "Editor",
+          width: 1280,
+          height: 720,
+          mimeType: "image/png",
+          base64Png: PNG_BASE64,
+        },
+      })
+      .mockResolvedValueOnce(OBSERVE_AX_PAYLOAD)
+      .mockResolvedValueOnce(TARGET_CATALOG_PAYLOAD);
+
+    await buildTool().execute("tool-no-cdp-1", { action: "observe" } as never);
+
+    expect(
+      gatewayMocks.callGatewayTool.mock.calls.some(
+        ([, , params]) => (params as { command?: string } | undefined)?.command === "computer.cdp",
+      ),
+    ).toBe(false);
+  });
+
   it("uses CDP DOM nodes as semantic candidates when AX is sparse", async () => {
     gatewayMocks.callGatewayTool
       .mockResolvedValueOnce({
@@ -2050,7 +2234,9 @@ describe("computer_use tool", () => {
       })
       .mockResolvedValueOnce(TARGET_CATALOG_PAYLOAD);
 
-    const result = await buildTool().execute("tool-cdp-1", { action: "observe" } as never);
+    const result = await buildTool().execute("tool-cdp-1", {
+      action: "observe",
+    } as never);
 
     expect(result).toMatchObject({
       details: {
@@ -2118,6 +2304,138 @@ describe("computer_use tool", () => {
       windowId: "win-web",
       observationId: "obs-cdp-1",
       maxNodes: 120,
+    });
+  });
+
+  it("refreshes a remembered window target lease before running a later action", async () => {
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        payload: {
+          observeAllowed: true,
+          controlAllowed: true,
+          supportsAx: false,
+          supportsOcr: false,
+          supportsCdp: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          scopeType: "window",
+          targetKind: "window",
+          targetId: "window:929",
+          observationId: "obs-wechat-1",
+          backend: "screen_capture_kit",
+          appName: "微信",
+          bundleId: "com.tencent.xinWeChat",
+          windowId: "929",
+          windowTitle: "微信",
+          width: 1280,
+          height: 900,
+          mimeType: "image/png",
+          base64Png: PNG_BASE64,
+        },
+      })
+      .mockResolvedValueOnce(TARGET_CATALOG_PAYLOAD);
+
+    await buildTool().execute("tool-lease-observe", {
+      action: "observe",
+    } as never);
+    gatewayMocks.callGatewayTool.mockClear();
+
+    gatewayMocks.callGatewayTool
+      .mockResolvedValueOnce({
+        payload: {
+          observeAllowed: true,
+          controlAllowed: true,
+          supportsAx: false,
+          supportsOcr: false,
+          supportsCdp: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          action: "focus_window",
+          status: "success",
+          executedAt: "2026-05-04T00:00:00Z",
+          appName: "微信",
+          bundleId: "com.tencent.xinWeChat",
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          scopeType: "window",
+          targetKind: "window",
+          targetId: "window:929",
+          observationId: "obs-wechat-2",
+          backend: "screen_capture_kit",
+          appName: "微信",
+          bundleId: "com.tencent.xinWeChat",
+          windowId: "929",
+          windowTitle: "微信",
+          width: 1280,
+          height: 900,
+          mimeType: "image/png",
+          base64Png: PNG_BASE64,
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          action: "hotkey",
+          status: "success",
+          executedAt: "2026-05-04T00:00:01Z",
+          appName: "微信",
+          bundleId: "com.tencent.xinWeChat",
+          windowId: "929",
+        },
+      });
+
+    const result = await buildTool().execute("tool-lease-action", {
+      action: "scroll",
+      direction: "down",
+      amount: 600,
+      targetId: "window:929",
+      verifyAfterAction: false,
+    } as never);
+
+    const commands = gatewayMocks.callGatewayTool.mock.calls.map(
+      ([, , params]) => (params as { command?: string } | undefined)?.command,
+    );
+    expect(commands).toEqual([
+      "computer.status",
+      "computer.action",
+      "computer.capture",
+      "computer.action",
+    ]);
+    expect(gatewayMocks.callGatewayTool.mock.calls[1]?.[2]).toMatchObject({
+      command: "computer.action",
+      params: {
+        action: "focus_window",
+        appName: "微信",
+        bundleId: "com.tencent.xinWeChat",
+      },
+    });
+    expect(gatewayMocks.callGatewayTool.mock.calls[2]?.[2]).toMatchObject({
+      command: "computer.capture",
+      params: {
+        scopeType: "current_window",
+      },
+    });
+    expect(gatewayMocks.callGatewayTool.mock.calls[3]?.[2]).toMatchObject({
+      command: "computer.action",
+      params: expect.objectContaining({
+        targetId: "window:929",
+        observationId: "obs-wechat-2",
+      }),
+    });
+    expect(result).toMatchObject({
+      details: {
+        kind: "computer_use/v1",
+        status: "ok",
+        action: {
+          type: "scroll",
+          status: "success",
+        },
+      },
     });
   });
 
@@ -2407,8 +2725,15 @@ describe("computer_use tool", () => {
     });
     expect(result.content).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ type: "text", text: expect.stringContaining("Candidates:") }),
-        expect.objectContaining({ type: "image", mimeType: "image/png", data: PNG_BASE64 }),
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Candidates:"),
+        }),
+        expect.objectContaining({
+          type: "image",
+          mimeType: "image/png",
+          data: PNG_BASE64,
+        }),
       ]),
     );
   });
@@ -3368,7 +3693,9 @@ describe("computer_use tool", () => {
         },
       });
 
-    const result = await tool.execute("tool-desktop-root-target", { action: "observe" } as never);
+    const result = await tool.execute("tool-desktop-root-target", {
+      action: "observe",
+    } as never);
 
     expect(result).toMatchObject({
       details: {

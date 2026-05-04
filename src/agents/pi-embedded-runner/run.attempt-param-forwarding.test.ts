@@ -62,6 +62,7 @@ const forwardingCases = [
       computerUse: {
         enabled: true,
         mode: "plan_and_act",
+        activation: "auto",
         scope: { type: "full_desktop" },
         hostPolicy: "local_only",
         modelPolicy: { mode: "follow_user_model" },
@@ -72,10 +73,31 @@ const forwardingCases = [
       computerUse: {
         enabled: true,
         mode: "plan_and_act",
+        activation: "auto",
         scope: { type: "full_desktop" },
         hostPolicy: "local_only",
         modelPolicy: { mode: "follow_user_model" },
         approvals: { highRiskActionsRequireConfirm: true },
+      },
+    },
+  },
+  {
+    name: "forwards browserUse so embedded attempts can expose the in-app browser tool",
+    runId: "forward-browserUse",
+    params: {
+      browserUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        hostPolicy: "local_only",
+        activation: "auto",
+      },
+    },
+    expected: {
+      browserUse: {
+        enabled: true,
+        mode: "plan_and_act",
+        hostPolicy: "local_only",
+        activation: "auto",
       },
     },
   },

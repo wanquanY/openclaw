@@ -121,6 +121,15 @@ function loadSessionStoreRuntime() {
   return sessionStoreRuntimePromise;
 }
 
+export async function prewarmGetReplyRunRuntime(): Promise<void> {
+  await Promise.all([
+    loadPiEmbeddedRuntime(),
+    loadAgentRunnerRuntime(),
+    loadSessionUpdatesRuntime(),
+    loadSessionStoreRuntime(),
+  ]);
+}
+
 function stripPromptThinkingDirectives(body: string): string {
   return body
     .split("\n")
@@ -236,6 +245,28 @@ export async function runPreparedReply(
     execOverrides,
     abortedLastRun,
   } = params;
+  const timingStartedAt = Date.now();
+  let timingLastAt = timingStartedAt;
+  const emitTiming = (stage: string, data?: Record<string, unknown>) => {
+    if (!opts?.onTiming) {
+      return;
+    }
+    const now = Date.now();
+    opts.onTiming({
+      stage: `get_reply_run.${stage}`,
+      elapsedMs: now - timingStartedAt,
+      deltaMs: now - timingLastAt,
+      ...(data ? { data } : {}),
+    });
+    timingLastAt = now;
+  };
+  emitTiming("start", {
+    sessionKey,
+    provider,
+    model,
+    isNewSession,
+    resetTriggered,
+  });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
@@ -330,6 +361,11 @@ export async function runPreparedReply(
           cfg,
         })
       : null;
+  emitTiming("prompt_context_ready", {
+    isFirstTurnInSession,
+    isBareSessionReset,
+    hasStartupContextPrelude: Boolean(startupContextPrelude),
+  });
   const baseBodyFinal = isBareSessionReset
     ? buildBareSessionResetPrompt(cfg)
     : stripPromptThinkingDirectives(baseBody);
@@ -378,6 +414,10 @@ export async function runPreparedReply(
     sessionKey,
     storePath,
     abortKey: command.abortKey,
+  });
+  emitTiming("session_hints_ready", {
+    hasMediaAttachment,
+    baseBodyChars: baseBodyForPrompt.length,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -450,6 +490,9 @@ export async function runPreparedReply(
             skillFilter: opts?.skillFilter,
           });
         })();
+  emitTiming("skills_snapshot_ready", {
+    hasSkillsSnapshot: Boolean(skillResult.skillsSnapshot),
+  });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
@@ -457,6 +500,7 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
+  emitTiming("thinking_level_ready", { resolvedThinkLevel });
   if (resolvedThinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
@@ -519,6 +563,10 @@ export async function runPreparedReply(
         inlineOptions: perMessageQueueOptions,
       });
   const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
+  emitTiming("pi_runtime_ready", {
+    useFastReplyRuntime,
+    hasPiRuntime: Boolean(piRuntime),
+  });
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
@@ -543,7 +591,11 @@ export async function runPreparedReply(
         storePath,
         isNewSession,
       });
+  emitTiming("auth_profile_ready", {
+    hasAuthProfile: Boolean(authProfileId),
+  });
   const { runReplyAgent } = await loadAgentRunnerRuntime();
+  emitTiming("agent_runner_runtime_ready");
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
@@ -570,6 +622,13 @@ export async function runPreparedReply(
     isHeartbeat: opts?.isHeartbeat === true,
     shouldFollowup,
     queueMode: resolvedQueue.mode,
+  });
+  emitTiming("queue_state_ready", {
+    queueMode: resolvedQueue.mode,
+    activeRunQueueAction,
+    laneSize,
+    isActive,
+    isStreaming,
   });
   if (isActive && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
@@ -609,12 +668,40 @@ export async function runPreparedReply(
   }
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const preparedComputerUse = preparedSessionState.sessionEntry?.computerUse;
+  const preparedBrowserUse = preparedSessionState.sessionEntry?.browserUse;
+  emitTiming("computer_use_state_ready", {
+    enabled: preparedComputerUse?.enabled === true,
+    scope: preparedComputerUse?.scope?.type,
+    modelPolicy: preparedComputerUse?.modelPolicy?.mode,
+  });
   logVerbose(
     `computer_use run session=${sessionKey ?? preparedSessionState.sessionId} enabled=${preparedComputerUse?.enabled === true} scope=${preparedComputerUse?.scope?.type ?? "n/a"} modelPolicy=${preparedComputerUse?.modelPolicy?.mode ?? "n/a"} approvals=${preparedComputerUse?.approvals?.highRiskActionsRequireConfirm === true ? "confirm" : "full"}`,
   );
   defaultRuntime.log?.(
     `[computer_use_trace] stage=get_reply_run session=${sessionKey ?? preparedSessionState.sessionId} enabled=${preparedComputerUse?.enabled === true} scope=${preparedComputerUse?.scope?.type ?? "n/a"} modelPolicy=${preparedComputerUse?.modelPolicy?.mode ?? "n/a"} approvals=${preparedComputerUse?.approvals?.highRiskActionsRequireConfirm === true ? "confirm" : "full"}`,
   );
+  const fastModeState = useFastReplyRuntime
+    ? { enabled: false }
+    : resolveFastModeState({
+        cfg,
+        provider,
+        model,
+        agentId,
+        sessionEntry: preparedSessionState.sessionEntry,
+      });
+  emitTiming("fast_mode_ready", {
+    enabled: fastModeState.enabled,
+  });
+  const enforceFinalTag =
+    !useFastReplyRuntime &&
+    isReasoningTagProvider(provider, {
+      config: cfg,
+      workspaceDir,
+      modelId: model,
+    });
+  emitTiming("reasoning_tag_policy_ready", {
+    enforceFinalTag,
+  });
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -661,20 +748,13 @@ export async function runPreparedReply(
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
-      fastMode: useFastReplyRuntime
-        ? false
-        : resolveFastModeState({
-            cfg,
-            provider,
-            model,
-            agentId,
-            sessionEntry: preparedSessionState.sessionEntry,
-          }).enabled,
+      fastMode: fastModeState.enabled,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       computerUse: preparedComputerUse,
+      browserUse: preparedBrowserUse,
       bashElevated: {
         enabled: elevatedEnabled,
         allowed: elevatedAllowed,
@@ -690,18 +770,24 @@ export async function runPreparedReply(
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       skipProviderRuntimeHints: useFastReplyRuntime,
-      ...(!useFastReplyRuntime &&
-      isReasoningTagProvider(provider, {
-        config: cfg,
-        workspaceDir,
-        modelId: model,
-      })
-        ? { enforceFinalTag: true }
-        : {}),
+      ...(enforceFinalTag ? { enforceFinalTag: true } : {}),
     },
   };
+  emitTiming("followup_run_ready", {
+    promptChars: followupRun.prompt.length,
+    extraSystemPromptChars: followupRun.run.extraSystemPrompt?.length ?? 0,
+    fastMode: followupRun.run.fastMode,
+    enforceFinalTag: followupRun.run.enforceFinalTag === true,
+  });
 
-  return runReplyAgent({
+  emitTiming("agent_run_start", {
+    queueMode: resolvedQueue.mode,
+    shouldSteer,
+    shouldFollowup,
+    isActive,
+    isStreaming,
+  });
+  const reply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
@@ -734,4 +820,8 @@ export async function runPreparedReply(
     typingMode,
     resetTriggered,
   });
+  emitTiming("agent_run_done", {
+    replyCount: reply ? (Array.isArray(reply) ? reply.length : 1) : 0,
+  });
+  return reply;
 }

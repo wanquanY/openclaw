@@ -33,6 +33,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
+import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
@@ -47,6 +48,13 @@ let sessionResetModelRuntimePromise: Promise<
 let stageSandboxMediaRuntimePromise: Promise<
   typeof import("./stage-sandbox-media.runtime.js")
 > | null = null;
+let mediaUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../media-understanding/apply.runtime.js")
+> | null = null;
+let linkUnderstandingApplyRuntimePromise: Promise<
+  typeof import("../../link-understanding/apply.runtime.js")
+> | null = null;
+let commandsCoreRuntimePromise: Promise<typeof import("./commands-core.runtime.js")> | null = null;
 
 function loadSessionResetModelRuntime() {
   sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
@@ -58,6 +66,21 @@ function loadStageSandboxMediaRuntime() {
   return stageSandboxMediaRuntimePromise;
 }
 
+function loadMediaUnderstandingApplyRuntime() {
+  mediaUnderstandingApplyRuntimePromise ??= import("../../media-understanding/apply.runtime.js");
+  return mediaUnderstandingApplyRuntimePromise;
+}
+
+function loadLinkUnderstandingApplyRuntime() {
+  linkUnderstandingApplyRuntimePromise ??= import("../../link-understanding/apply.runtime.js");
+  return linkUnderstandingApplyRuntimePromise;
+}
+
+function loadCommandsCoreRuntime() {
+  commandsCoreRuntimePromise ??= import("./commands-core.runtime.js");
+  return commandsCoreRuntimePromise;
+}
+
 let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
   null;
 let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
@@ -65,6 +88,18 @@ let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null =
 function loadHookRunnerGlobal() {
   hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
   return hookRunnerGlobalPromise;
+}
+
+export async function prewarmGetReplyRuntime(): Promise<void> {
+  await Promise.all([
+    loadSessionResetModelRuntime(),
+    loadStageSandboxMediaRuntime(),
+    loadMediaUnderstandingApplyRuntime(),
+    loadLinkUnderstandingApplyRuntime(),
+    loadCommandsCoreRuntime(),
+    loadHookRunnerGlobal(),
+    import("./get-reply-run.js").then((runtime) => runtime.prewarmGetReplyRunRuntime()),
+  ]);
 }
 
 function loadOriginRouting() {
@@ -97,18 +132,6 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   return channel.filter((name) => agentSet.has(name));
 }
 
-function hasInboundMedia(ctx: MsgContext): boolean {
-  return Boolean(
-    ctx.StickerMediaIncluded ||
-    ctx.Sticker ||
-    normalizeOptionalString(ctx.MediaPath) ||
-    normalizeOptionalString(ctx.MediaUrl) ||
-    ctx.MediaPaths?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaUrls?.some((value) => normalizeOptionalString(value)) ||
-    ctx.MediaTypes?.length,
-  );
-}
-
 function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
   if (!message) {
@@ -126,7 +149,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   if (!hasInboundMedia(params.ctx)) {
     return false;
   }
-  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
   await applyMediaUnderstanding(params);
   return true;
 }
@@ -138,7 +161,7 @@ async function applyLinkUnderstandingIfNeeded(params: {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
   }
-  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  const { applyLinkUnderstanding } = await loadLinkUnderstandingApplyRuntime();
   await applyLinkUnderstanding(params);
   return true;
 }
@@ -153,6 +176,25 @@ export async function getReplyFromConfig(
     loadConfig,
     isFastTestEnv,
     configOverride,
+  });
+  const timingStartedAt = Date.now();
+  let timingLastAt = timingStartedAt;
+  const emitTiming = (stage: string, data?: Record<string, unknown>) => {
+    if (!opts?.onTiming) {
+      return;
+    }
+    const now = Date.now();
+    opts.onTiming({
+      stage: `get_reply.${stage}`,
+      elapsedMs: now - timingStartedAt,
+      deltaMs: now - timingLastAt,
+      ...(data ? { data } : {}),
+    });
+    timingLastAt = now;
+  };
+  emitTiming("start", {
+    sessionKey: ctx.SessionKey,
+    commandSource: ctx.CommandSource,
   });
   const useFastTestBootstrap = shouldUseReplyFastTestBootstrap({
     isFastTestEnv,
@@ -206,6 +248,12 @@ export async function getReplyFromConfig(
       hasResolvedHeartbeatModelOverride = true;
     }
   }
+  emitTiming("config_and_model_ready", {
+    agentId,
+    provider,
+    model,
+    isHeartbeat: opts?.isHeartbeat === true,
+  });
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = useFastTestBootstrap
@@ -215,6 +263,7 @@ export async function getReplyFromConfig(
         ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
       });
   const workspaceDir = workspace.dir;
+  emitTiming("workspace_ready", { workspaceDir });
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -247,6 +296,10 @@ export async function getReplyFromConfig(
   emitPreAgentMessageHooks({
     ctx: finalized,
     cfg,
+    isFastTestEnv,
+  });
+  emitTiming("preprocess_done", {
+    hasInboundMedia: hasInboundMedia(finalized),
     isFastTestEnv,
   });
 
@@ -282,6 +335,12 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  emitTiming("session_state_ready", {
+    sessionKey,
+    isNewSession,
+    resetTriggered,
+    systemSent,
+  });
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
     const { applyResetModelOverride } = await loadSessionResetModelRuntime();
     await applyResetModelOverride({
@@ -299,24 +358,28 @@ export async function getReplyFromConfig(
       defaultModel,
       aliasIndex,
     });
+    emitTiming("reset_model_override_done");
   }
 
-  const channelModelOverride = resolveChannelModelOverride({
-    cfg,
-    channel:
-      groupResolution?.channel ??
-      sessionEntry.channel ??
-      sessionEntry.origin?.provider ??
-      (typeof finalized.OriginatingChannel === "string"
-        ? finalized.OriginatingChannel
-        : undefined) ??
-      finalized.Provider,
-    groupId: groupResolution?.id ?? sessionEntry.groupId,
-    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
-    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
-    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-    parentSessionKey: sessionCtx.ParentSessionKey,
-  });
+  const channelModelOverride = cfg.channels?.modelByChannel
+    ? resolveChannelModelOverride({
+        cfg,
+        channel:
+          groupResolution?.channel ??
+          sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
+          (typeof finalized.OriginatingChannel === "string"
+            ? finalized.OriginatingChannel
+            : undefined) ??
+          finalized.Provider,
+        groupId: groupResolution?.id ?? sessionEntry.groupId,
+        groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
+        groupChannel:
+          sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+        groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+        parentSessionKey: sessionCtx.ParentSessionKey,
+      })
+    : null;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -343,6 +406,12 @@ export async function getReplyFromConfig(
       model = resolved.ref.model;
     }
   }
+  emitTiming("model_overrides_resolved", {
+    provider,
+    model,
+    hasSessionModelOverride,
+    hasChannelModelOverride: Boolean(channelModelOverride),
+  });
 
   if (
     shouldUseReplyFastDirectiveExecution({
@@ -362,7 +431,8 @@ export async function getReplyFromConfig(
       triggerBodyNormalized,
       commandAuthorized,
     });
-    return runPreparedReply({
+    emitTiming("fast_directive_run_prepared_start", { provider, model });
+    const fastReply = await runPreparedReply({
       ctx,
       sessionCtx,
       cfg,
@@ -416,6 +486,10 @@ export async function getReplyFromConfig(
       workspaceDir,
       abortedLastRun,
     });
+    emitTiming("fast_directive_run_prepared_done", {
+      replyCount: fastReply ? (Array.isArray(fastReply) ? fastReply.length : 1) : 0,
+    });
+    return fastReply;
   }
 
   const directiveResult = await resolveReplyDirectives({
@@ -446,6 +520,7 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (directiveResult.kind === "reply") {
+    emitTiming("directives_resolved", { kind: "reply" });
     return directiveResult.reply;
   }
 
@@ -479,6 +554,13 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+  emitTiming("directives_resolved", {
+    kind: "run",
+    provider,
+    model,
+    contextTokens,
+    blockStreamingEnabled,
+  });
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
@@ -488,7 +570,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
+    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
     const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -544,11 +626,13 @@ export async function getReplyFromConfig(
   });
   if (inlineActionResult.kind === "reply") {
     await maybeEmitMissingResetHooks();
+    emitTiming("inline_actions_done", { kind: "reply" });
     return inlineActionResult.reply;
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  emitTiming("inline_actions_done", { kind: "run" });
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
@@ -572,6 +656,9 @@ export async function getReplyFromConfig(
           channelId: hookMessageProvider,
         },
       );
+      emitTiming("before_agent_reply_hook_done", {
+        handled: hookResult?.handled === true,
+      });
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
@@ -587,9 +674,11 @@ export async function getReplyFromConfig(
       sessionKey,
       workspaceDir,
     });
+    emitTiming("sandbox_media_done");
   }
 
-  return runPreparedReply({
+  emitTiming("run_prepared_start", { provider, model });
+  const reply = await runPreparedReply({
     ctx,
     sessionCtx,
     cfg,
@@ -634,4 +723,8 @@ export async function getReplyFromConfig(
     workspaceDir,
     abortedLastRun,
   });
+  emitTiming("run_prepared_done", {
+    replyCount: reply ? (Array.isArray(reply) ? reply.length : 1) : 0,
+  });
+  return reply;
 }

@@ -321,6 +321,24 @@ describe("gateway sessions patch", () => {
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
+  test("uses configured model catalog before loading dynamic catalog for session model patches", async () => {
+    let catalogLoadCount = 0;
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => {
+          catalogLoadCount += 1;
+          throw new Error("dynamic catalog should not be loaded for configured model");
+        },
+      }),
+    );
+
+    expect(catalogLoadCount).toBe(0);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   connectOk,
@@ -11,13 +14,31 @@ installGatewayTestHooks({ scope: "suite" });
 
 describe("gateway plugin approval registration (e2e)", () => {
   test("serves plugin.approval.request through a running gateway websocket", async () => {
-    const harness = await createGatewaySuiteHarness();
+    const token = "plugin-approval-e2e-token";
+    const runId = randomUUID();
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "token", token } },
+    });
     const approvalsWs = await harness.openWs();
     const requesterWs = await harness.openWs();
 
     try {
-      await connectOk(approvalsWs, { scopes: ["operator.approvals"] });
-      await connectOk(requesterWs, { scopes: ["operator.admin"] });
+      await connectOk(approvalsWs, {
+        token,
+        deviceIdentityPath: path.join(
+          os.tmpdir(),
+          `openclaw-plugin-approval-${runId}-approvals.json`,
+        ),
+        scopes: ["operator.approvals"],
+      });
+      await connectOk(requesterWs, {
+        token,
+        deviceIdentityPath: path.join(
+          os.tmpdir(),
+          `openclaw-plugin-approval-${runId}-requester.json`,
+        ),
+        scopes: ["operator.admin"],
+      });
 
       const requestEventPromise = onceMessage<{
         type: "event";

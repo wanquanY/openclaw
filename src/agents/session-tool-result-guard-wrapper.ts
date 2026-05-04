@@ -1,10 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 export type GuardedSessionManager = SessionManager & {
@@ -23,9 +25,12 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     sessionKey?: string;
+    config?: OpenClawConfig;
+    contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
     transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
     allowSyntheticToolResults?: boolean;
+    missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
   },
 ): GuardedSessionManager {
@@ -76,8 +81,17 @@ export function guardSessionManager(
     },
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
+    missingToolResultText: opts?.missingToolResultText,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
+    maxToolResultChars:
+      typeof opts?.contextWindowTokens === "number"
+        ? resolveLiveToolResultMaxChars({
+            contextWindowTokens: opts.contextWindowTokens,
+            cfg: opts.config,
+            agentId: opts.agentId,
+          })
+        : undefined,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

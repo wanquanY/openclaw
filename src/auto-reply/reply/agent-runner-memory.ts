@@ -213,12 +213,14 @@ async function appendPostCompactionRefreshPrompt(params: {
 }): Promise<void> {
   const refreshPrompts = [
     buildCompressedSessionMemoryPrompt(
-      params.sessionKey ? params.sessionStore?.[params.sessionKey] ?? params.sessionEntry : params.sessionEntry,
+      params.sessionKey
+        ? (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry)
+        : params.sessionEntry,
     ),
-    await readPostCompactionContext(
-    params.followupRun.run.workspaceDir,
-    params.cfg,
-  ),
+    await readPostCompactionContext(params.followupRun.run.workspaceDir, {
+      cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
+    }),
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
   if (refreshPrompts.length === 0) {
     return;
@@ -363,6 +365,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -465,6 +468,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const result = await memoryDeps.compactEmbeddedPiSession({
     sessionId: entry.sessionId,
     sessionKey: params.sessionKey,
+    sandboxSessionKey: params.runtimePolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageChannel: params.followupRun.run.messageProvider,
     groupId: entry.groupId ?? params.followupRun.run.groupId,
@@ -546,6 +550,7 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
@@ -561,7 +566,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
     });
     if (!runtime.sandboxed) {
       return true;
@@ -785,6 +790,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...embeddedContext,
           ...senderContext,
           ...runBaseParams,
+          sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
           trigger: "memory",

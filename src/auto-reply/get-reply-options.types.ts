@@ -24,6 +24,13 @@ export type TypingPolicy =
   | "internal_webchat"
   | "heartbeat";
 
+export type ReplyTimingEvent = {
+  stage: string;
+  elapsedMs: number;
+  deltaMs: number;
+  data?: Record<string, unknown>;
+};
+
 export type ReplyThreadingPolicy = {
   /** Override implicit reply-to-current behavior for the current turn. */
   implicitCurrentMessage?: "default" | "allow" | "deny";
@@ -55,6 +62,11 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /**
+   * If true, dispatch skips default tool/progress text messages and expects the
+   * channel to surface progress via its own streaming/edit UX.
+   */
+  suppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
@@ -103,6 +115,7 @@ export type GetReplyOptions = {
     command?: string;
     host?: string;
     reason?: string;
+    scope?: "turn" | "session";
     message?: string;
   }) => Promise<void> | void;
   /** Called when command output streams or completes. */
@@ -137,6 +150,8 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Internal timing hook used by gateway chat diagnostics. */
+  onTiming?: (event: ReplyTimingEvent) => void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

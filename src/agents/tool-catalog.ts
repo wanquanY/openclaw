@@ -206,6 +206,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "browser_use",
+    label: "browser_use",
+    description: "Control the visible Doxie in-app browser via page observation and actions",
+    sectionId: "ui",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "browser",
     label: "browser",
     description: "Control web browser",
@@ -326,10 +334,10 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: listCoreToolIdsForProfile("minimal"),
   },
   coding: {
-    allow: listCoreToolIdsForProfile("coding"),
+    allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
   },
   messaging: {
-    allow: listCoreToolIdsForProfile("messaging"),
+    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
   full: {},
 };

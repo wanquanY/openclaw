@@ -19,12 +19,6 @@ import {
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
-import {
-  isOllamaCompatProvider,
-  resolveOllamaCompatNumCtxEnabled,
-  shouldInjectOllamaCompatNumCtx,
-  wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama-runtime.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugin-sdk/provider-model-shared.js";
 import { resolveSignalReactionLevel } from "../../../plugin-sdk/signal.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -111,6 +105,12 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../ollama-runtime-facade.js";
 import { replayMetadataFromState } from "../replay-state.js";
 import {
   clearActiveEmbeddedRun,
@@ -128,7 +128,11 @@ import {
   createSystemPromptOverride,
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
-import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  toSessionToolAllowlist,
+} from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
@@ -203,7 +207,7 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "../../../plugin-sdk/ollama-runtime.js";
+} from "../ollama-runtime-facade.js";
 export {
   decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
@@ -388,6 +392,43 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const attemptStartedAt = Date.now();
+  const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+  let setupFinishedAt: number | undefined;
+  let promptStartedAt: number | undefined;
+  let promptEndedAt: number | undefined;
+  let firstAgentEventAt: number | undefined;
+  let firstAssistantStartAt: number | undefined;
+  let firstReasoningAt: number | undefined;
+  let firstPartialAt: number | undefined;
+  const setupTimings: Record<string, number> = {};
+  const msFromAttemptStart = (value: number | undefined) =>
+    value === undefined ? "n/a" : String(value - attemptStartedAt);
+  const recordSetupTiming = <T>(name: string, startedAt: number, value: T): T => {
+    setupTimings[name] = Date.now() - startedAt;
+    return value;
+  };
+  const logAttemptTiming = (extra?: { assistantCount?: number; toolCount?: number }) => {
+    if (isProbeSession) {
+      return;
+    }
+    log.info(
+      `[embedded-attempt-timing] runId=${params.runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
+        `provider=${params.provider}/${params.modelId} totalMs=${Date.now() - attemptStartedAt} ` +
+        `setupMs=${setupFinishedAt === undefined ? "n/a" : setupFinishedAt - attemptStartedAt} ` +
+        `promptStartMs=${msFromAttemptStart(promptStartedAt)} promptMs=${
+          promptStartedAt === undefined || promptEndedAt === undefined
+            ? "n/a"
+            : promptEndedAt - promptStartedAt
+        } ` +
+        `firstAgentEventMs=${msFromAttemptStart(firstAgentEventAt)} ` +
+        `firstAssistantStartMs=${msFromAttemptStart(firstAssistantStartAt)} ` +
+        `firstReasoningMs=${msFromAttemptStart(firstReasoningAt)} ` +
+        `firstPartialMs=${msFromAttemptStart(firstPartialAt)} ` +
+        `assistantCount=${extra?.assistantCount ?? "n/a"} toolCount=${extra?.toolCount ?? "n/a"} ` +
+        `setupBreakdown=${JSON.stringify(setupTimings)}`,
+    );
+  };
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
@@ -416,12 +457,17 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   try {
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      agentId: params.agentId,
-      skillsSnapshot: params.skillsSnapshot,
-    });
+    const skillsResolveStartedAt = Date.now();
+    const { shouldLoadSkillEntries, skillEntries } = recordSetupTiming(
+      "skillsResolveMs",
+      skillsResolveStartedAt,
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: params.agentId,
+        skillsSnapshot: params.skillsSnapshot,
+      }),
+    );
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
@@ -434,16 +480,24 @@ export async function runEmbeddedAttempt(
           agentId: params.agentId,
         });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
-      config: params.config,
-      workspaceDir: effectiveWorkspace,
-      agentId: params.agentId,
-    });
+    const skillsPromptStartedAt = Date.now();
+    const skillsPrompt = recordSetupTiming(
+      "skillsPromptMs",
+      skillsPromptStartedAt,
+      resolveSkillsPromptForRun({
+        skillsSnapshot: params.skillsSnapshot,
+        entries: shouldLoadSkillEntries ? skillEntries : undefined,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        agentId: params.agentId,
+      }),
+    );
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
+    const bootstrapStartedAt = Date.now();
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = recordSetupTiming(
+      "bootstrapContextMs",
+      bootstrapStartedAt,
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
@@ -452,7 +506,8 @@ export async function runEmbeddedAttempt(
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
-      });
+      }),
+    );
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -496,6 +551,7 @@ export async function runEmbeddedAttempt(
     let yieldAbortSettled: Promise<void> | null = null;
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
+    const toolsStartedAt = Date.now();
     const toolsRaw = params.disableTools
       ? []
       : createOpenClawCodingTools({
@@ -538,12 +594,14 @@ export async function runEmbeddedAttempt(
           modelContextWindowTokens: params.model.contextWindow,
           modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
           computerUse: params.computerUse,
+          browserUse: params.browserUse,
           currentChannelId: params.currentChannelId,
           currentThreadTs: params.currentThreadTs,
           currentMessageId: params.currentMessageId,
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
           modelHasVision,
+          deferMediaToolModelConfig: true,
           requireExplicitMessageTarget:
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
@@ -555,8 +613,9 @@ export async function runEmbeddedAttempt(
             abortSessionForYield?.();
           },
         });
+    setupTimings.toolsCreateMs = Date.now() - toolsStartedAt;
     defaultRuntime.log?.(
-      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
+      `[computer_use_trace] stage=embedded_attempt_pre_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} activation=${params.computerUse?.activation ?? "n/a"} source=${params.computerUse?.source ?? "n/a"} scope=${params.computerUse?.scope?.type ?? "n/a"} modelPolicy=${params.computerUse?.modelPolicy?.mode ?? "n/a"} toolsRawHas=${toolsRaw.some((tool) => tool.name === "computer_use")}`,
     );
     const toolsEnabled = supportsModelTools(params.model);
     const tools = sanitizeToolsForGoogle({
@@ -564,9 +623,10 @@ export async function runEmbeddedAttempt(
       provider: params.provider,
     });
     defaultRuntime.log?.(
-      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
+      `[computer_use_trace] stage=embedded_attempt_post_tools session=${params.sessionKey ?? params.sessionId} enabled=${params.computerUse?.enabled === true} activation=${params.computerUse?.activation ?? "n/a"} source=${params.computerUse?.source ?? "n/a"} toolsEnabled=${toolsEnabled} toolsHas=${tools.some((tool) => tool.name === "computer_use")} toolNames=${tools.map((tool) => tool.name).join(",")}`,
     );
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    const bundleMcpStartedAt = Date.now();
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -577,6 +637,8 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
+    setupTimings.bundleMcpMs = Date.now() - bundleMcpStartedAt;
+    const bundleLspStartedAt = Date.now();
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -588,6 +650,7 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
+    setupTimings.bundleLspMs = Date.now() - bundleLspStartedAt;
     const effectiveTools = [
       ...tools,
       ...(bundleMcpRuntime?.tools ?? []),
@@ -599,7 +662,9 @@ export async function runEmbeddedAttempt(
     });
     logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
 
+    const machineNameStartedAt = Date.now();
     const machineName = await getMachineDisplayName();
+    setupTimings.machineNameMs = Date.now() - machineNameStartedAt;
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
@@ -696,12 +761,14 @@ export async function runEmbeddedAttempt(
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const docsPathStartedAt = Date.now();
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
+    setupTimings.docsPathMs = Date.now() - docsPathStartedAt;
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
@@ -878,7 +945,7 @@ export async function runEmbeddedAttempt(
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
@@ -906,6 +973,14 @@ export async function runEmbeddedAttempt(
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+      // Pi SDK treats `tools` as an active/allowed tool-name list during
+      // session construction. OpenClaw routes every runtime tool through
+      // customTools, so passing the built-in split result (`[]`) would
+      // accidentally disable the whole tool registry while the OpenClaw system
+      // prompt still advertises those tools.
+      const sessionToolAllowlist = toSessionToolAllowlist(
+        collectRegisteredToolNames(allCustomTools),
+      );
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
@@ -914,7 +989,7 @@ export async function runEmbeddedAttempt(
         modelRegistry: params.modelRegistry,
         model: params.model,
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
-        tools: builtInTools,
+        tools: sessionToolAllowlist,
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
@@ -924,6 +999,7 @@ export async function runEmbeddedAttempt(
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
+      session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
@@ -1283,6 +1359,9 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      const markFirstAgentEvent = () => {
+        firstAgentEventAt ??= Date.now();
+      };
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -1293,15 +1372,35 @@ export async function runEmbeddedAttempt(
         shouldEmitToolResult: params.shouldEmitToolResult,
         shouldEmitToolOutput: params.shouldEmitToolOutput,
         onToolResult: params.onToolResult,
-        onReasoningStream: params.onReasoningStream,
+        onReasoningStream: params.onReasoningStream
+          ? async (payload) => {
+              firstReasoningAt ??= Date.now();
+              await params.onReasoningStream?.(payload);
+            }
+          : undefined,
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply: params.onPartialReply,
-        onAssistantMessageStart: params.onAssistantMessageStart,
-        onAgentEvent: params.onAgentEvent,
+        onPartialReply: params.onPartialReply
+          ? async (payload) => {
+              firstPartialAt ??= Date.now();
+              await params.onPartialReply?.(payload);
+            }
+          : undefined,
+        onAssistantMessageStart: params.onAssistantMessageStart
+          ? async () => {
+              firstAssistantStartAt ??= Date.now();
+              await params.onAssistantMessageStart?.();
+            }
+          : undefined,
+        onAgentEvent: params.onAgentEvent
+          ? (evt) => {
+              markFirstAgentEvent();
+              params.onAgentEvent?.(evt);
+            }
+          : undefined,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: sandboxSessionKey,
@@ -1328,6 +1427,7 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
         setTerminalLifecycleMeta,
       } = subscription;
+      setupFinishedAt = Date.now();
 
       const queueHandle: EmbeddedPiQueueHandle = {
         queueMessage: async (text: string) => {
@@ -1340,7 +1440,6 @@ export async function runEmbeddedAttempt(
       setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
-      const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
@@ -1433,7 +1532,7 @@ export async function runEmbeddedAttempt(
       let idleTimedOut = false;
       const prePromptMessageCount = activeSession.messages.length;
       try {
-        const promptStartedAt = Date.now();
+        promptStartedAt = Date.now();
 
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
@@ -1638,8 +1737,11 @@ export async function runEmbeddedAttempt(
           }
         } finally {
           log.debug(
-            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${
+              promptStartedAt === undefined ? "n/a" : Date.now() - promptStartedAt
+            }`,
           );
+          promptEndedAt = Date.now();
         }
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
@@ -1809,7 +1911,10 @@ export async function runEmbeddedAttempt(
                 messages: messagesSnapshot,
                 success: !aborted && !promptError,
                 error: promptError ? describeUnknownError(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
+                durationMs:
+                  promptStartedAt === undefined
+                    ? Date.now() - attemptStartedAt
+                    : Date.now() - promptStartedAt,
               },
               {
                 agentId: hookAgentId,
@@ -1887,6 +1992,11 @@ export async function runEmbeddedAttempt(
             log.warn(`llm_output hook failed: ${String(err)}`);
           });
       }
+
+      logAttemptTiming({
+        assistantCount: assistantTexts.length,
+        toolCount: toolMetasNormalized.length,
+      });
 
       return {
         aborted,

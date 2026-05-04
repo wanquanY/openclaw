@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  buildConfiguredModelCatalog,
+  type ModelRef,
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
@@ -9,14 +11,15 @@ import {
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
-  formatXHighModelHint,
+  isThinkingLevelSupported,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  supportsXHighThinking,
+  resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
+import { normalizeBrowserUseSessionConfig } from "../browser-use/types.js";
 import { normalizeComputerUseSessionConfig } from "../computer-use/types.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -93,6 +96,25 @@ function normalizeOptionalTrimmedString(raw: unknown): string | undefined {
   }
   const trimmed = raw.trim();
   return trimmed || undefined;
+}
+
+function applyResolvedModelOverride(params: {
+  entry: SessionEntry;
+  resolved: ModelRef;
+  resolvedDefault: ModelRef;
+}) {
+  const isDefault =
+    params.resolved.provider === params.resolvedDefault.provider &&
+    params.resolved.model === params.resolvedDefault.model;
+  applyModelOverrideToSessionEntry({
+    entry: params.entry,
+    selection: {
+      provider: params.resolved.provider,
+      model: params.resolved.model,
+      isDefault,
+    },
+    markLiveSwitchPending: true,
+  });
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -510,6 +532,19 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("browserUse" in patch) {
+    const raw = patch.browserUse;
+    if (raw === null) {
+      delete next.browserUse;
+    } else if (raw !== undefined) {
+      const normalized = normalizeBrowserUseSessionConfig(raw);
+      if (!normalized) {
+        return invalid("invalid browserUse config");
+      }
+      next.browserUse = normalized;
+    }
+  }
+
   if ("model" in patch) {
     const raw = patch.model;
     if (raw === null) {
@@ -527,46 +562,72 @@ export async function applySessionsPatchToStore(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
-        };
-      }
-      const catalog = await params.loadGatewayModelCatalog();
-      const resolved = resolveAllowedModelRef({
+      const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+      const configuredResolved = resolveAllowedModelRef({
         cfg,
-        catalog,
+        catalog: configuredCatalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
-      if ("error" in resolved) {
-        return invalid(resolved.error);
+      if (!params.loadGatewayModelCatalog) {
+        if ("error" in configuredResolved) {
+          return {
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
+          };
+        }
+        applyResolvedModelOverride({
+          entry: next,
+          resolved: configuredResolved.ref,
+          resolvedDefault,
+        });
+      } else {
+        const resolved =
+          "error" in configuredResolved
+            ? resolveAllowedModelRef({
+                cfg,
+                catalog: await params.loadGatewayModelCatalog(),
+                raw: trimmed,
+                defaultProvider: resolvedDefault.provider,
+                defaultModel: subagentModelHint ?? resolvedDefault.model,
+              })
+            : configuredResolved;
+        if ("error" in resolved) {
+          return invalid(resolved.error);
+        }
+        applyResolvedModelOverride({
+          entry: next,
+          resolved: resolved.ref,
+          resolvedDefault,
+        });
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
-        entry: next,
-        selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
-        },
-        markLiveSwitchPending: true,
-      });
     }
   }
 
-  if (next.thinkingLevel === "xhigh") {
+  if (next.thinkingLevel) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
-    if (!supportsXHighThinking(effectiveProvider, effectiveModel)) {
+    const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
+    if (!thinkingLevel) {
+      delete next.thinkingLevel;
+    } else if (
+      !isThinkingLevelSupported({
+        provider: effectiveProvider,
+        model: effectiveModel,
+        level: thinkingLevel,
+      })
+    ) {
       if ("thinkingLevel" in patch) {
-        return invalid(`thinkingLevel "xhigh" is only supported for ${formatXHighModelHint()}`);
+        return invalid(
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|")})`,
+        );
       }
-      next.thinkingLevel = "high";
+      next.thinkingLevel = resolveSupportedThinkingLevel({
+        provider: effectiveProvider,
+        model: effectiveModel,
+        level: thinkingLevel,
+      });
     }
   }
 

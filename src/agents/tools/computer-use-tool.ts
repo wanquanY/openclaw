@@ -1,9 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import type { ComputerUseSessionConfig } from "../../computer-use/types.js";
 import {
-  COMPUTER_USE_ACTIONS,
   type ComputerUseAction,
   type ComputerUseActionResult,
   type ComputerUseCandidate,
@@ -24,9 +22,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, readNumberParam, readStringParam, textResult } from "./common.js";
+import {
+  actionCanLeaseFocusedSurface,
+  actionShouldObserveFocusedSurfaceByDefault,
+  buildPreActionFocusPayload,
+  mergePreActionFocusResultIntoActionArgs,
+} from "./computer-use/action-target-policy.js";
 import {
   COMPUTER_USE_ALLOWED_APPROVAL_DECISIONS,
   COMPUTER_USE_APPROVAL_PLUGIN_ID,
@@ -82,6 +85,7 @@ import {
   selectedTargetFromCandidate,
   type PreparedComputerUseFocusTarget,
 } from "./computer-use/perception.js";
+import { ComputerUseToolSchema } from "./computer-use/schema.js";
 import {
   discoverComputerUseTargets,
   prepareFocusWindowTarget,
@@ -90,66 +94,7 @@ import { callGatewayTool } from "./gateway.js";
 
 export { clearComputerUseCandidateMemoryForTesting } from "./computer-use/perception.js";
 
-const COMPUTER_USE_SCROLL_DIRECTIONS = ["up", "down", "left", "right"] as const;
 const log = createSubsystemLogger("agents/tools/computer-use");
-
-const ComputerUseToolSchema = Type.Object({
-  action: stringEnum(COMPUTER_USE_ACTIONS, {
-    description:
-      "Computer action to run. Use discover_targets to retrieve real running app and window names from the device before switching apps. Prefer focus_window for app switching or bringing an app forward. Reserve hotkey for in-app shortcuts only.",
-  }),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
-  fromX: Type.Optional(Type.Number()),
-  fromY: Type.Optional(Type.Number()),
-  toX: Type.Optional(Type.Number()),
-  toY: Type.Optional(Type.Number()),
-  text: Type.Optional(
-    Type.String({
-      description:
-        "Text to enter for action=type or action=set_text_submit. When the user asks to search, ask a question, or fill a field, use action=type with text and the input field elementRef in one call instead of a separate click. Use action=set_text_submit when the intended next step is submitting/opening the highlighted result after text entry.",
-    }),
-  ),
-  hotkey: Type.Optional(
-    Type.String({
-      description:
-        "Keyboard shortcut, for example cmd+l. Use only for in-app shortcuts, not for OS-level app switching.",
-    }),
-  ),
-  direction: Type.Optional(optionalStringEnum(COMPUTER_USE_SCROLL_DIRECTIONS)),
-  amount: Type.Optional(Type.Number({ minimum: 0 })),
-  waitMs: Type.Optional(Type.Number({ minimum: 0 })),
-  targetId: Type.Optional(
-    Type.String({
-      description:
-        "Stable target id from discover_targets, for example window:<id>, display:<id>, desktop:all, or app:<id>. Prefer targetId over guessed app/window names when available.",
-    }),
-  ),
-  appName: Type.Optional(
-    Type.String({
-      description: "Target app display name, used by focus_window or launch_app.",
-    }),
-  ),
-  bundleId: Type.Optional(
-    Type.String({
-      description: "Target macOS bundle id, used by focus_window or launch_app.",
-    }),
-  ),
-  windowId: Type.Optional(
-    Type.String({
-      description: "Target window id, used by focus_window when a specific window is known.",
-    }),
-  ),
-  elementRef: Type.Optional(
-    Type.String({
-      description:
-        "Element candidate ref from the latest observation, for example @e1. Prefer elementRef over raw x/y when clicking, typing into, or scrolling a visible UI element.",
-    }),
-  ),
-  verifyAfterAction: Type.Optional(Type.Boolean()),
-  timeoutMs: Type.Optional(Type.Number({ minimum: 0 })),
-});
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -438,6 +383,20 @@ async function createComputerUseToolResult(params: {
   )) as AgentToolResult<ComputerUseStructuredPayload>;
 }
 
+function withComputerUseInvocationMetadata(
+  payload: ComputerUseStructuredPayload,
+  sessionConfig: ComputerUseSessionConfig | undefined,
+): ComputerUseStructuredPayload {
+  if (!sessionConfig) return payload;
+  return {
+    ...payload,
+    activation: payload.activation ?? sessionConfig.activation,
+    ...((payload.source ?? sessionConfig.source)
+      ? { source: payload.source ?? sessionConfig.source }
+      : {}),
+  };
+}
+
 function summarizeAction(
   action: ComputerUseAction,
   status: "pending" | "success" | "error",
@@ -495,6 +454,7 @@ async function createComputerUseFailedResult(params: {
   targets?: ComputerUseTargetCatalog;
   warning?: string;
   imageSanitization?: ReturnType<typeof resolveImageSanitizationLimits>;
+  sessionConfig?: ComputerUseSessionConfig;
 }) {
   const target =
     params.target ??
@@ -526,7 +486,7 @@ async function createComputerUseFailedResult(params: {
   };
   return await createComputerUseToolResult({
     label: "computer_use:error",
-    payload,
+    payload: withComputerUseInvocationMetadata(payload, params.sessionConfig),
     summary: buildModelFacingSummary({
       summary: params.summary,
       observation: params.observation,
@@ -591,6 +551,7 @@ async function requestComputerUseApproval(params: {
   frame?: ComputerUseFrameArtifactRef;
   selected?: ComputerUseSelectedTarget;
   target?: ComputerUseTargetBinding;
+  sessionConfig?: ComputerUseSessionConfig;
 }): Promise<ComputerUseApprovalOutcome> {
   const metadata = buildHighRiskApprovalMetadata({
     action: params.action,
@@ -629,26 +590,30 @@ async function requestComputerUseApproval(params: {
     return { decision: "unavailable" };
   }
 
-  emitUpdate(params.onUpdate, {
-    kind: "computer_use/v1",
-    status: "approval-pending",
-    stage: "acting",
-    summary: `Waiting for approval to ${params.action.replace(/_/g, " ")}`,
-    ...(params.frame ? { frame: params.frame } : {}),
-    ...(params.selected ? { selected: params.selected } : {}),
-    action: buildActionResult(params.action, params.args, "pending"),
-    ...(params.observation ? { observation: params.observation } : {}),
-    ...(params.target ? { target: params.target } : {}),
-    approvalKind: "plugin",
-    approvalId,
-    approvalSlug: buildApprovalSlug(approvalId),
-    allowedDecisions: [...COMPUTER_USE_ALLOWED_APPROVAL_DECISIONS],
-    title: metadata.title,
-    description: metadata.description,
-    severity: metadata.severity,
-    ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
-    warning: "High-risk desktop action requires approval.",
-  });
+  emitUpdate(
+    params.onUpdate,
+    {
+      kind: "computer_use/v1",
+      status: "approval-pending",
+      stage: "acting",
+      summary: `Waiting for approval to ${params.action.replace(/_/g, " ")}`,
+      ...(params.frame ? { frame: params.frame } : {}),
+      ...(params.selected ? { selected: params.selected } : {}),
+      action: buildActionResult(params.action, params.args, "pending"),
+      ...(params.observation ? { observation: params.observation } : {}),
+      ...(params.target ? { target: params.target } : {}),
+      approvalKind: "plugin",
+      approvalId,
+      approvalSlug: buildApprovalSlug(approvalId),
+      allowedDecisions: [...COMPUTER_USE_ALLOWED_APPROVAL_DECISIONS],
+      title: metadata.title,
+      description: metadata.description,
+      severity: metadata.severity,
+      ...(expiresAtMs !== undefined ? { expiresAtMs } : {}),
+      warning: "High-risk desktop action requires approval.",
+    },
+    params.sessionConfig,
+  );
 
   const immediateDecision =
     typeof requestResult?.decision === "string" || requestResult?.decision === null
@@ -757,11 +722,13 @@ function buildActionResult(
 function emitUpdate(
   onUpdate: Parameters<AnyAgentTool["execute"]>[3],
   payload: ComputerUseStructuredPayload,
+  sessionConfig?: ComputerUseSessionConfig,
 ): void {
   if (!onUpdate) {
     return;
   }
-  onUpdate(textResult(payload.summary ?? "computer_use update", payload));
+  const decoratedPayload = withComputerUseInvocationMetadata(payload, sessionConfig);
+  onUpdate(textResult(decoratedPayload.summary ?? "computer_use update", decoratedPayload));
 }
 
 function buildAxRequestPayload(params: {
@@ -823,11 +790,15 @@ export function createComputerUseTool(options: {
   agentId?: string;
   config?: OpenClawConfig;
 }): AnyAgentTool {
+  const activation = normalizeComputerUseSessionConfig(options.sessionConfig)?.activation ?? "auto";
+  const activationInstruction =
+    activation === "required"
+      ? "Activation: required. The user explicitly selected Computer Use for this turn; use this tool to complete the desktop-facing part of the request unless it is impossible or unsafe."
+      : "Activation: auto. Use this tool only when operating or inspecting the visible desktop is materially useful for the user's task.";
   return {
     label: "Computer Use",
     name: "computer_use",
-    description:
-      "Observe and control the bound local desktop client using screenshots and GUI actions. For entering text, call action=type with text and elementRef/x/y in one tool call; do not click a field and observe again before typing. The host uses semantic UI/AX actions first, keeps the target window leased for control actions, and falls back to real input events only when necessary.",
+    description: `Observe and control the bound local desktop client using screenshots and GUI actions. ${activationInstruction} For entering text, call action=type with text and elementRef/x/y in one tool call; do not click a field and observe again before typing. The host uses semantic UI/AX actions first, keeps the target window leased for control actions, and falls back to real input events only when necessary.`,
     parameters: ComputerUseToolSchema,
     execute: async (toolCallId, rawArgs, signal, onUpdate) => {
       const args = isRecord(rawArgs) ? rawArgs : {};
@@ -875,6 +846,7 @@ export function createComputerUseTool(options: {
             warning:
               "Retry discover_targets after the desktop host is ready. Use only real device targets for focus_window.",
             imageSanitization,
+            sessionConfig,
           });
         }
         const summary =
@@ -896,7 +868,7 @@ export function createComputerUseTool(options: {
         };
         return await createComputerUseToolResult({
           label: "computer_use:discover_targets",
-          payload,
+          payload: withComputerUseInvocationMetadata(payload, sessionConfig),
           summary: buildModelFacingSummary({
             summary,
             targets: targetCatalog,
@@ -923,6 +895,7 @@ export function createComputerUseTool(options: {
             targets: preparedFocusTarget.targets,
             warning: mergeComputerUseWarnings(actionWarning, preparedFocusTarget.warning),
             imageSanitization,
+            sessionConfig,
           });
         }
         actionArgs = preparedFocusTarget.args;
@@ -939,20 +912,76 @@ export function createComputerUseTool(options: {
         );
       }
 
+      let preActionFocused = false;
+      const preActionFocusPayload = buildPreActionFocusPayload({
+        action,
+        args: actionArgs,
+        sessionKey: options.sessionKey,
+        agentId: options.agentId,
+      });
+      if (preActionFocusPayload) {
+        try {
+          const focusPayload = await invokeComputerClientCommand<GatewayComputerActionPayload>({
+            sessionKey: options.sessionKey,
+            command: "computer.action",
+            payload: preActionFocusPayload,
+            timeoutMs,
+          });
+          actionArgs = mergePreActionFocusResultIntoActionArgs({
+            args: actionArgs,
+            focusPayload,
+          });
+          preActionFocused = true;
+          actionWarning = mergeComputerUseWarnings(
+            actionWarning,
+            "Focused the referenced desktop surface before executing the action to refresh the window lease.",
+          );
+        } catch (error) {
+          return await createComputerUseFailedResult({
+            action,
+            args: actionArgs,
+            summary: "Desktop target could not be focused before the action.",
+            error:
+              error instanceof Error
+                ? error.message
+                : "The referenced desktop target is no longer available.",
+            warning: mergeComputerUseWarnings(
+              "Re-run discover_targets or observe the target, then retry with a current elementRef.",
+              actionWarning,
+            ),
+            imageSanitization,
+            sessionConfig,
+          });
+        }
+      }
+
       let capturePayload: GatewayComputerCapturePayload | undefined;
       const shouldCaptureBeforeAction = action !== "focus_window";
       const shouldReadBeforeSemanticSnapshot = action !== "focus_window";
       const shouldReadAfterOcrSnapshot = action !== "focus_window";
       if (shouldCaptureBeforeAction) {
+        const explicitTargetId = normalizeOptionalString(readStringParam(actionArgs, "targetId"));
+        const explicitWindowId = normalizeOptionalString(readStringParam(actionArgs, "windowId"));
+        const explicitDisplayId = normalizeOptionalString(readStringParam(actionArgs, "displayId"));
+        const captureTarget = explicitWindowId
+          ? {
+              scopeType: "window",
+              windowId: explicitWindowId,
+              ...(explicitTargetId ? { targetId: explicitTargetId } : {}),
+            }
+          : preActionFocused ||
+              (!explicitTargetId &&
+                !explicitDisplayId &&
+                actionShouldObserveFocusedSurfaceByDefault(action))
+            ? buildCurrentWindowTargetRequest()
+            : {
+                ...buildResolvedObservationTarget({ scope }),
+                ...(explicitTargetId ? { targetId: explicitTargetId } : {}),
+              };
         capturePayload = await invokeComputerClientCommand<GatewayComputerCapturePayload>({
           sessionKey: options.sessionKey,
           command: "computer.capture",
-          payload: {
-            ...buildResolvedObservationTarget({ scope }),
-            ...(normalizeOptionalString(readStringParam(actionArgs, "targetId"))
-              ? { targetId: normalizeOptionalString(readStringParam(actionArgs, "targetId")) }
-              : {}),
-          },
+          payload: captureTarget,
           timeoutMs,
         });
         log.info("computer_use capture completed", {
@@ -1244,6 +1273,7 @@ export function createComputerUseTool(options: {
             actionWarning,
           ),
           imageSanitization,
+          sessionConfig,
         });
       }
       if (
@@ -1275,6 +1305,7 @@ export function createComputerUseTool(options: {
             actionWarning,
           ),
           imageSanitization,
+          sessionConfig,
         });
       }
       if (action === "set_text_submit" && !selectedPoint && !selectedElementRef) {
@@ -1299,6 +1330,7 @@ export function createComputerUseTool(options: {
             actionWarning,
           ),
           imageSanitization,
+          sessionConfig,
         });
       }
       if (
@@ -1329,26 +1361,31 @@ export function createComputerUseTool(options: {
             actionWarning,
           ),
           imageSanitization,
+          sessionConfig,
         });
       }
-      emitUpdate(onUpdate, {
-        kind: "computer_use/v1",
-        status: "ok",
-        stage: action === "observe" ? "observing" : "acting",
-        summary: summarizeAction(action, "pending"),
-        ...(beforeFrame ? { frame: beforeFrame } : {}),
-        ...(beforeAxSnapshot ? { axSnapshot: beforeAxSnapshot } : {}),
-        ...(beforeCdpSnapshot ? { cdpSnapshot: beforeCdpSnapshot } : {}),
-        ...(beforeOcrSnapshot ? { ocrSnapshot: beforeOcrSnapshot } : {}),
-        ...(beforeCandidates?.length ? { candidates: beforeCandidates } : {}),
-        ...(selectedTarget ? { selected: selectedTarget } : {}),
-        action: buildActionResult(action, actionArgs, "pending", pendingActionPayload),
-        ...(observation ? { observation } : {}),
-        ...(beforeTargetBinding ? { target: beforeTargetBinding } : {}),
-        ...(targetCatalog ? { targets: targetCatalog } : {}),
-        ...(beforeDiagnostics ? { diagnostics: beforeDiagnostics } : {}),
-        ...(actionWarning ? { warning: actionWarning } : {}),
-      });
+      emitUpdate(
+        onUpdate,
+        {
+          kind: "computer_use/v1",
+          status: "ok",
+          stage: action === "observe" ? "observing" : "acting",
+          summary: summarizeAction(action, "pending"),
+          ...(beforeFrame ? { frame: beforeFrame } : {}),
+          ...(beforeAxSnapshot ? { axSnapshot: beforeAxSnapshot } : {}),
+          ...(beforeCdpSnapshot ? { cdpSnapshot: beforeCdpSnapshot } : {}),
+          ...(beforeOcrSnapshot ? { ocrSnapshot: beforeOcrSnapshot } : {}),
+          ...(beforeCandidates?.length ? { candidates: beforeCandidates } : {}),
+          ...(selectedTarget ? { selected: selectedTarget } : {}),
+          action: buildActionResult(action, actionArgs, "pending", pendingActionPayload),
+          ...(observation ? { observation } : {}),
+          ...(beforeTargetBinding ? { target: beforeTargetBinding } : {}),
+          ...(targetCatalog ? { targets: targetCatalog } : {}),
+          ...(beforeDiagnostics ? { diagnostics: beforeDiagnostics } : {}),
+          ...(actionWarning ? { warning: actionWarning } : {}),
+        },
+        sessionConfig,
+      );
 
       if (!preparedAction.ok) {
         return await createComputerUseFailedResult({
@@ -1368,6 +1405,7 @@ export function createComputerUseTool(options: {
           targets: targetCatalog,
           warning: preparedAction.warning,
           imageSanitization,
+          sessionConfig,
         });
       }
 
@@ -1391,7 +1429,7 @@ export function createComputerUseTool(options: {
         };
         return await createComputerUseToolResult({
           label: "computer_use:observe",
-          payload: resultPayload,
+          payload: withComputerUseInvocationMetadata(resultPayload, sessionConfig),
           summary: buildModelFacingSummary({
             summary: resultPayload.summary ?? "computer_use observe complete",
             observation,
@@ -1434,6 +1472,7 @@ export function createComputerUseTool(options: {
             frame: beforeFrame,
             selected: selectedTarget,
             target: beforeTargetBinding,
+            sessionConfig,
           });
           if (
             approvalOutcome.decision !== "allow-once" &&
@@ -1467,6 +1506,7 @@ export function createComputerUseTool(options: {
                 actionWarning,
               ),
               imageSanitization,
+              sessionConfig,
             });
           }
         }
@@ -1528,6 +1568,7 @@ export function createComputerUseTool(options: {
               actionWarning,
             ),
             imageSanitization,
+            sessionConfig,
           });
         }
         throw error;
@@ -1546,23 +1587,27 @@ export function createComputerUseTool(options: {
           capture: capturePayload,
           action: actionPayload,
         });
-        emitUpdate(onUpdate, {
-          kind: "computer_use/v1",
-          status: "ok",
-          stage: "verifying",
-          summary: "Verifying desktop state",
-          ...(beforeFrame ? { frame: beforeFrame } : {}),
-          ...(beforeAxSnapshot ? { axSnapshot: beforeAxSnapshot } : {}),
-          ...(beforeCdpSnapshot ? { cdpSnapshot: beforeCdpSnapshot } : {}),
-          ...(beforeOcrSnapshot ? { ocrSnapshot: beforeOcrSnapshot } : {}),
-          ...(beforeCandidates?.length ? { candidates: beforeCandidates } : {}),
-          action: buildActionResult(action, actionArgs, "pending", actionPayload),
-          ...(observation ? { observation } : {}),
-          ...(beforeTargetBinding ? { target: beforeTargetBinding } : {}),
-          ...(targetCatalog ? { targets: targetCatalog } : {}),
-          ...(verifyingDiagnostics ? { diagnostics: verifyingDiagnostics } : {}),
-          ...(actionWarning ? { warning: actionWarning } : {}),
-        });
+        emitUpdate(
+          onUpdate,
+          {
+            kind: "computer_use/v1",
+            status: "ok",
+            stage: "verifying",
+            summary: "Verifying desktop state",
+            ...(beforeFrame ? { frame: beforeFrame } : {}),
+            ...(beforeAxSnapshot ? { axSnapshot: beforeAxSnapshot } : {}),
+            ...(beforeCdpSnapshot ? { cdpSnapshot: beforeCdpSnapshot } : {}),
+            ...(beforeOcrSnapshot ? { ocrSnapshot: beforeOcrSnapshot } : {}),
+            ...(beforeCandidates?.length ? { candidates: beforeCandidates } : {}),
+            action: buildActionResult(action, actionArgs, "pending", actionPayload),
+            ...(observation ? { observation } : {}),
+            ...(beforeTargetBinding ? { target: beforeTargetBinding } : {}),
+            ...(targetCatalog ? { targets: targetCatalog } : {}),
+            ...(verifyingDiagnostics ? { diagnostics: verifyingDiagnostics } : {}),
+            ...(actionWarning ? { warning: actionWarning } : {}),
+          },
+          sessionConfig,
+        );
         const focusVerificationWindowId =
           action === "focus_window"
             ? (normalizeOptionalString(actionPayload.windowId) ?? focusTarget?.windowId)
@@ -1700,6 +1745,7 @@ export function createComputerUseTool(options: {
             actionWarning,
           ),
           imageSanitization,
+          sessionConfig,
         });
       }
 
@@ -1721,7 +1767,9 @@ export function createComputerUseTool(options: {
         ...(finalTargetCatalog ? { targets: finalTargetCatalog } : {}),
         ...(finalDiagnostics ? { diagnostics: finalDiagnostics } : {}),
         ...(mergeComputerUseWarnings(actionPayload.warning ?? undefined, actionWarning)
-          ? { warning: mergeComputerUseWarnings(actionPayload.warning ?? undefined, actionWarning) }
+          ? {
+              warning: mergeComputerUseWarnings(actionPayload.warning ?? undefined, actionWarning),
+            }
           : {}),
       };
       log.info("computer_use tool result prepared", {
@@ -1744,7 +1792,7 @@ export function createComputerUseTool(options: {
       });
       return await createComputerUseToolResult({
         label: "computer_use:action",
-        payload: resultPayload,
+        payload: withComputerUseInvocationMetadata(resultPayload, sessionConfig),
         summary: buildModelFacingSummary({
           summary: resultPayload.summary ?? "computer_use action complete",
           observation: finalObservation,
@@ -1768,6 +1816,7 @@ export function createComputerUseTool(options: {
 const DEFAULT_TOOL_SESSION_CONFIG: ComputerUseSessionConfig = {
   enabled: true,
   mode: "plan_and_act",
+  activation: "auto",
   scope: { type: "full_desktop" },
   hostPolicy: "local_only",
   modelPolicy: { mode: "follow_user_model" },

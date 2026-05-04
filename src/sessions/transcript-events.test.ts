@@ -37,6 +37,31 @@ describe("transcript events", () => {
     });
   });
 
+  it("includes recall operation metadata when provided", () => {
+    const listener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(listener));
+
+    emitSessionTranscriptUpdate({
+      sessionFile: "  /tmp/session.jsonl  ",
+      sessionKey: "  agent:main:webchat-1  ",
+      operation: "recall",
+      recalledMessageId: "  user-2  ",
+      removedEntries: 3.8,
+      removedMessages: 2.2,
+      abortedRunIds: [" run-1 ", "", "run-2"],
+    });
+
+    expect(listener).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      sessionKey: "agent:main:webchat-1",
+      operation: "recall",
+      recalledMessageId: "user-2",
+      removedEntries: 3,
+      removedMessages: 2,
+      abortedRunIds: ["run-1", "run-2"],
+    });
+  });
+
   it("continues notifying other listeners when one throws", () => {
     const first = vi.fn(() => {
       throw new Error("boom");

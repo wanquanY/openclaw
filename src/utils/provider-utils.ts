@@ -8,6 +8,7 @@ import {
 
 const BUILTIN_REASONING_OUTPUT_MODES = {
   "google-generative-ai": "tagged",
+  "video-workflow": "native",
 } as const;
 
 /**
@@ -29,6 +30,12 @@ export function resolveReasoningOutputMode(params: {
   }
 
   const normalized = normalizeOptionalLowercaseString(provider) ?? "";
+  const builtInMode =
+    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
+  if (builtInMode) {
+    return builtInMode;
+  }
+
   const pluginMode = resolveProviderReasoningOutputModeWithPlugin({
     provider,
     config: params.config,
@@ -46,12 +53,6 @@ export function resolveReasoningOutputMode(params: {
   });
   if (pluginMode) {
     return pluginMode;
-  }
-
-  const builtInMode =
-    BUILTIN_REASONING_OUTPUT_MODES[normalized as keyof typeof BUILTIN_REASONING_OUTPUT_MODES];
-  if (builtInMode) {
-    return builtInMode;
   }
 
   // Keep a tiny built-in fallback for non-plugin Google surfaces.

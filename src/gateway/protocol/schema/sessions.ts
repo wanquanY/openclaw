@@ -1,4 +1,5 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { BrowserUseSessionConfigSchema } from "../../../browser-use/schema.js";
 import { ComputerUseSessionConfigSchema } from "../../../computer-use/schema.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -95,6 +96,10 @@ export const SessionsCreateParamsSchema = Type.Object(
     threadId: Type.Optional(NonEmptyString),
     title: Type.Optional(Type.String()),
     titleLocked: Type.Optional(Type.Boolean()),
+    reasoningLevel: Type.Optional(NonEmptyString),
+    verboseLevel: Type.Optional(NonEmptyString),
+    computerUse: Type.Optional(ComputerUseSessionConfigSchema),
+    browserUse: Type.Optional(BrowserUseSessionConfigSchema),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -166,6 +171,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     responseUsage: Type.Optional(
       Type.Union([
@@ -183,6 +189,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     computerUse: Type.Optional(Type.Union([ComputerUseSessionConfigSchema, Type.Null()])),
+    browserUse: Type.Optional(Type.Union([BrowserUseSessionConfigSchema, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedWorkspaceDir: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -214,6 +221,7 @@ export const SessionsResetParamsSchema = Type.Object(
 export const SessionsMemoryFlushParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    wait: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

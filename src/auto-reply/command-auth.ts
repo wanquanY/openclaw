@@ -459,9 +459,6 @@ function isConversationLikeIdentity(value: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized.includes("@g.us")) {
-    return true;
-  }
   if (normalized.startsWith("chat_id:")) {
     return true;
   }
@@ -707,9 +704,7 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     isOwnerForCommands,
