@@ -84,6 +84,19 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    hostProductIdentity: z
+      .object({
+        productId: z.string().optional(),
+        productName: z.string().optional(),
+        assistantRole: z.string().optional(),
+        userFacingRuntimeName: z.string().optional(),
+        internalRuntimeName: z.string().optional(),
+        internalRuntimeVisibility: z
+          .union([z.literal("implementation_detail"), z.literal("visible")])
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])

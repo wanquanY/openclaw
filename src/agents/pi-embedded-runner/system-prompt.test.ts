@@ -72,6 +72,34 @@ describe("buildEmbeddedSystemPrompt", () => {
     clearMemoryPluginState();
   });
 
+  it("forwards host product identity into the embedded prompt", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      hostProductIdentity: {
+        productName: "Doxie",
+        assistantRole: "Doxie 的 AI 伙伴",
+        internalRuntimeName: "OpenClaw",
+      },
+    });
+
+    expect(prompt).toContain("You are a personal assistant running inside Doxie.");
+    expect(prompt).toContain("## Host Product Identity");
+    expect(prompt).toContain("Doxie 的 AI 伙伴");
+    expect(prompt).toContain("OpenClaw is an internal runtime implementation detail");
+  });
+
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",

@@ -122,6 +122,7 @@ export function buildSystemPrompt(params: {
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    hostProductIdentity: params.config?.agents?.defaults?.hostProductIdentity,
   });
 }
 

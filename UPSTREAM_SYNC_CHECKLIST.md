@@ -690,6 +690,43 @@ git merge upstream
   - 用户 abort 或 gateway restart 后，不会留下以 assistant tool call 结尾的坏 transcript。
 - 如果上游后续改 client.invoke payload、Computer Use command policy、Pi transcript replay、chat.abort 或 restart recovery，同步后必须先人工复核这里。
 
+### 21. Host product identity、agent system prompt 与 agent defaults schema
+
+涉及文件：
+
+- `src/agents/host-product-identity.ts`
+- `src/agents/system-prompt.ts`
+- `src/agents/system-prompt.test.ts`
+- `src/agents/cli-runner/helpers.ts`
+- `src/agents/pi-embedded-runner/system-prompt.ts`
+- `src/agents/pi-embedded-runner/system-prompt.test.ts`
+- `src/agents/pi-embedded-runner/run/attempt.ts`
+- `src/agents/pi-embedded-runner/compact.ts`
+- `src/config/types.agent-defaults.ts`
+- `src/config/zod-schema.agent-defaults.ts`
+- `src/config/schema.help.ts`
+- `src/config/schema.labels.ts`
+- `src/config/schema.base.generated.ts`
+- `docs/gateway/config-agents.md`
+
+必须确认：
+
+- `agents.defaults.hostProductIdentity` 仍然在 TypeScript config type、Zod schema、generated base schema、help、label 和 gateway config docs 中成套存在，不能只保留运行时代码而丢失配置面。
+- `hostProductIdentity.productName / assistantRole / userFacingRuntimeName / internalRuntimeName / internalRuntimeVisibility` 仍然是同一份语义，默认把 `internalRuntimeName` 视为 implementation detail。
+- 普通 agent system prompt 和 `promptMode: "none"` 都必须把 host product identity 作为 primary identity，不能退回到固定的 `OpenClaw` 自我介绍。
+- CLI runner、embedded runner 首轮 run、embedded compaction 都必须从 `config.agents.defaults.hostProductIdentity` 传入 system prompt builder，不能只覆盖某一条运行链。
+- prompt 注入内容必须经过 prompt literal sanitizer，避免产品名或角色字段把 system prompt 结构打坏。
+- 上游如果改 `buildAgentSystemPrompt`、`buildEmbeddedSystemPrompt`、provider prompt contribution、compaction prompt 或 config schema 生成逻辑，同步后必须人工核查 host identity 仍然贯穿所有入口。
+
+背景：
+
+- 这是 2026-05-05 为下游宿主产品嵌入 OpenClaw 时的用户可见身份补充的本地能力。
+- 下游当前依赖的是：
+  - 用户看到的是宿主产品身份，而不是默认 OpenClaw agent 身份。
+  - OpenClaw 可以作为内部 runtime 保留在调试语境里，但不会在普通对话中主动暴露。
+  - CLI、embedded run 和 compaction 后续对话都保持同一身份语义。
+- 如果上游后续重构 agent prompt、bootstrap prompt、config schema 或生成文档，同步后必须先确认这条 host identity 链没有被静默截断。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -740,6 +777,7 @@ rg -n "recordToolCreateTiming|logToolCreateTiming|customTools|sessions_spawn|cap
 rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks src/sessions src/gateway src/infra
 rg -n "browser_use|BrowserUseSessionConfig|browserUse|clientCapabilityBindings\\.browser_use|browser.action|browser.observe" src/browser-use src/agents src/auto-reply src/config src/gateway
 rg -n "InteractiveCapability|activation|approval_required|action-target-policy|computer\\.targets|computer\\.ocr|computer\\.cdp|appendSyntheticInterruptedToolResults|isSessionTranscriptResumable" src/interactive-capability src/browser-use src/computer-use src/agents src/gateway
+rg -n "hostProductIdentity|HostProductIdentity|buildHostProductIdentitySection|internalRuntimeVisibility|userFacingRuntimeName" src/agents src/config docs/gateway/config-agents.md
 ```
 
 ### D. 验证范围
@@ -760,6 +798,8 @@ pnpm test -- \
   src/agents/pi-embedded-runner/run/attempt.test.ts \
   src/agents/pi-embedded-runner/run/stream-selection.test.ts \
   src/agents/openai-ws-stream.test.ts \
+  src/agents/system-prompt.test.ts \
+  src/agents/pi-embedded-runner/system-prompt.test.ts \
   src/agents/main-session-restart-recovery.test.ts \
   src/agents/tools/browser-use-tool.test.ts \
   src/agents/tools/computer-use-tool.test.ts \

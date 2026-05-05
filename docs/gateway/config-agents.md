@@ -494,6 +494,35 @@ Provider-independent prompt overlays applied by model family. GPT-5-family model
 - `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
 - Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
 
+### `agents.defaults.hostProductIdentity`
+
+Product/host identity injected into the agent system prompt. Use this when
+OpenClaw is embedded inside another user-facing product and the model should
+identify with that product instead of introducing itself as an OpenClaw agent.
+
+```json5
+{
+  agents: {
+    defaults: {
+      hostProductIdentity: {
+        productId: "doxie",
+        productName: "Doxie",
+        assistantRole: "Doxie 的 AI 伙伴",
+        userFacingRuntimeName: "Doxie",
+        internalRuntimeName: "OpenClaw",
+        internalRuntimeVisibility: "implementation_detail",
+      },
+    },
+  },
+}
+```
+
+- `productName` and `assistantRole` are the user-facing identity.
+- `userFacingRuntimeName` is used when explaining capabilities or runtime
+  surfaces. It defaults to `productName`.
+- `internalRuntimeName` is treated as an implementation detail by default; the
+  agent should mention it only when the user is debugging or explicitly asks.
+
 ### `agents.defaults.heartbeat`
 
 Periodic heartbeat runs.

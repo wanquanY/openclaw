@@ -9,6 +9,49 @@ import {
 } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
+  it("uses host product identity as the primary assistant identity", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      hostProductIdentity: {
+        productId: "doxie",
+        productName: "Doxie",
+        assistantRole: "Doxie 的 AI 伙伴",
+        userFacingRuntimeName: "Doxie",
+        internalRuntimeName: "OpenClaw",
+        internalRuntimeVisibility: "implementation_detail",
+      },
+    });
+
+    expect(prompt).toContain("You are a personal assistant running inside Doxie.");
+    expect(prompt).not.toContain("You are a personal assistant running inside OpenClaw.");
+    expect(prompt).toContain("## Host Product Identity");
+    expect(prompt).toContain("You are Doxie 的 AI 伙伴 inside Doxie.");
+    expect(prompt).toContain(
+      "Doxie is the user-facing product experience. When describing where you run or what you can do, refer to Doxie.",
+    );
+    expect(prompt).toContain(
+      "OpenClaw is an internal runtime implementation detail. Do not introduce yourself as an agent of OpenClaw unless the user is explicitly debugging the runtime.",
+    );
+    expect(prompt).toContain("## Tooling");
+    expect(prompt).toContain("## Safety");
+  });
+
+  it("keeps host product identity in promptMode none", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "none",
+      hostProductIdentity: {
+        productName: "Doxie",
+        assistantRole: "Doxie 的 AI 伙伴",
+      },
+    });
+
+    expect(prompt).toContain("You are a personal assistant running inside Doxie.");
+    expect(prompt).toContain("## Host Product Identity");
+    expect(prompt).toContain("Doxie 的 AI 伙伴");
+    expect(prompt).not.toContain("## Tooling");
+  });
+
   it("formats owner section for plain, hash, and missing owner lists", () => {
     const cases = typedCases<{
       name: string;

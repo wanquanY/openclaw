@@ -3,6 +3,7 @@ import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { HostProductIdentityConfig } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import {
@@ -16,6 +17,10 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
+import {
+  buildHostProductIdentitySection,
+  normalizeHostProductIdentity,
+} from "./host-product-identity.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
@@ -435,6 +440,17 @@ function formatFullAccessBlockedReason(reason?: EmbeddedFullAccessBlockedReason)
   }
   return "runtime constraints";
 }
+
+function buildAgentIdentityLine(
+  hostProductIdentity: HostProductIdentityConfig | undefined,
+): string {
+  const identity = normalizeHostProductIdentity(hostProductIdentity);
+  if (!identity) {
+    return "You are a personal assistant running inside OpenClaw.";
+  }
+  return `You are a personal assistant running inside ${sanitizeForPromptLiteral(identity.userFacingRuntimeName)}.`;
+}
+
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -485,6 +501,7 @@ export function buildAgentSystemPrompt(params: {
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
   promptContribution?: ProviderSystemPromptContribution;
+  hostProductIdentity?: HostProductIdentityConfig;
 }) {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
@@ -682,15 +699,20 @@ export function buildAgentSystemPrompt(params: {
     readToolName,
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
+  const identityLine = buildAgentIdentityLine(params.hostProductIdentity);
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    const hostIdentity = buildHostProductIdentitySection(params.hostProductIdentity);
+    return hostIdentity.length > 0
+      ? [identityLine, "", ...hostIdentity].filter(Boolean).join("\n")
+      : identityLine;
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    identityLine,
     "",
+    ...buildHostProductIdentitySection(params.hostProductIdentity),
     "## Tooling",
     "Tool availability (filtered by policy):",
     "Tool names are case-sensitive. Call tools exactly as listed.",

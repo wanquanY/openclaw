@@ -954,6 +954,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 2800). Additional files are truncated from the prelude once this cap is reached.",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+  "agents.defaults.hostProductIdentity":
+    "Product/host identity injected into the agent system prompt. Use this for clients that embed OpenClaw as an internal runtime and need the model to identify with the user-facing product.",
+  "agents.defaults.hostProductIdentity.productId":
+    'Stable product id for diagnostics, for example "doxie".',
+  "agents.defaults.hostProductIdentity.productName":
+    'User-facing product name, for example "Doxie".',
+  "agents.defaults.hostProductIdentity.assistantRole":
+    'User-facing assistant relationship, for example "Doxie 的 AI 伙伴".',
+  "agents.defaults.hostProductIdentity.userFacingRuntimeName":
+    "Name the agent should use when describing where it runs or what surface it controls. Defaults to productName.",
+  "agents.defaults.hostProductIdentity.internalRuntimeName":
+    'Internal runtime name, for example "OpenClaw".',
+  "agents.defaults.hostProductIdentity.internalRuntimeVisibility":
+    'Controls whether the internal runtime is treated as an implementation detail (default) or visible technical runtime. Values: "implementation_detail" or "visible".',
   "agents.defaults.promptOverlays":
     "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
   "agents.defaults.promptOverlays.gpt5":

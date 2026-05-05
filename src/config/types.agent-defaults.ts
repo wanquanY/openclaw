@@ -29,6 +29,21 @@ export type PromptOverlaysConfig = {
   gpt5?: Gpt5PromptOverlayConfig;
 };
 
+export type HostProductIdentityConfig = {
+  /** Stable product id for telemetry/debugging, e.g. "doxie". */
+  productId?: string;
+  /** User-facing product name, e.g. "Doxie". */
+  productName?: string;
+  /** User-facing assistant relationship, e.g. "Doxie's AI partner". */
+  assistantRole?: string;
+  /** User-facing runtime name when explaining capabilities. Defaults to productName. */
+  userFacingRuntimeName?: string;
+  /** Internal runtime name, e.g. "OpenClaw". */
+  internalRuntimeName?: string;
+  /** How much the agent should expose the internal runtime name. */
+  internalRuntimeVisibility?: "implementation_detail" | "visible";
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -225,6 +240,8 @@ export type AgentDefaultsConfig = {
   systemPromptOverride?: string;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
+  /** Product/host identity injected into the agent system prompt. */
+  hostProductIdentity?: HostProductIdentityConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**

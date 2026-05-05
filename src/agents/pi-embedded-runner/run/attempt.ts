@@ -805,6 +805,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      hostProductIdentity: params.config?.agents?.defaults?.hostProductIdentity,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

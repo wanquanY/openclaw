@@ -780,6 +780,7 @@ export async function compactEmbeddedPiSessionDirect(
           contextFiles,
           memoryCitationsMode: params.config?.memory?.citations,
           promptContribution,
+          hostProductIdentity: params.config?.agents?.defaults?.hostProductIdentity,
         });
       return createSystemPromptOverride(
         transformProviderSystemPrompt({
