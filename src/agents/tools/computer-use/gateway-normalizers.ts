@@ -40,6 +40,10 @@ import type {
 } from "./gateway-payloads.js";
 
 function buildFramePreviewUrl(payload: GatewayComputerCapturePayload): string | undefined {
+  const frameUrl = normalizeOptionalString(payload.frameUrl);
+  if (frameUrl) {
+    return frameUrl;
+  }
   const mimeType = normalizeOptionalString(payload.mimeType) ?? "image/png";
   const base64 = normalizeOptionalString(payload.base64Png);
   return base64 ? `data:${mimeType};base64,${base64}` : undefined;
@@ -51,14 +55,16 @@ function buildFrameRef(
   payload: GatewayComputerCapturePayload,
 ): ComputerUseFrameArtifactRef | undefined {
   const previewUrl = buildFramePreviewUrl(payload);
-  if (!previewUrl) {
+  const filePath = normalizeOptionalString(payload.framePath);
+  if (!previewUrl && !filePath) {
     return undefined;
   }
   return {
     artifactId: normalizeOptionalString(payload.capturedAt)
       ? `${toolCallId}:${phase}:${payload.capturedAt}`
       : `${toolCallId}:${phase}:${crypto.randomUUID()}`,
-    previewUrl,
+    ...(previewUrl ? { previewUrl } : {}),
+    ...(filePath ? { filePath } : {}),
     width: typeof payload.width === "number" ? payload.width : undefined,
     height: typeof payload.height === "number" ? payload.height : undefined,
     capturedAt: normalizeOptionalString(payload.capturedAt) ?? undefined,

@@ -52,9 +52,14 @@ const mockState = vi.hoisted(() => ({
     message?: unknown;
     messageId?: string;
   }>,
-  savedMediaResults: [] as Array<{ path: string; contentType?: string }>,
+  savedMediaResults: [] as Array<{ id?: string; path: string; contentType?: string }>,
   saveMediaError: null as Error | null,
-  savedMediaCalls: [] as Array<{ contentType?: string; subdir?: string; size: number }>,
+  savedMediaCalls: [] as Array<{
+    contentType?: string;
+    source?: string;
+    subdir?: string;
+    size: number;
+  }>,
   saveMediaWait: null as Promise<void> | null,
   activeSaveMediaCalls: 0,
   maxActiveSaveMediaCalls: 0,
@@ -224,7 +229,7 @@ vi.mock("../../media/store.js", async () => {
       const next = mockState.savedMediaResults.shift();
       try {
         return {
-          id: "saved-media",
+          id: next?.id ?? "saved-media",
           path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
@@ -233,6 +238,26 @@ vi.mock("../../media/store.js", async () => {
         mockState.activeSaveMediaCalls -= 1;
       }
     }),
+    saveMediaSource: vi.fn(
+      async (source: string, _headers?: Record<string, string>, subdir?: string) => {
+        if (mockState.saveMediaError) {
+          throw mockState.saveMediaError;
+        }
+        const next = mockState.savedMediaResults.shift();
+        mockState.savedMediaCalls.push({
+          contentType: next?.contentType,
+          source,
+          subdir,
+          size: 123,
+        });
+        return {
+          id: next?.id ?? "saved-media",
+          path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
+          size: 123,
+          contentType: next?.contentType ?? "image/png",
+        };
+      },
+    ),
   };
 });
 
@@ -1982,6 +2007,97 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.MediaPaths).toEqual(["/tmp/chat-send-inline.png", "/tmp/offloaded-big.png"]);
       expect(message?.MediaType).toBe("image/png");
       expect(message?.MediaTypes).toEqual(["image/png", "image/png"]);
+    });
+  });
+
+  it("stages attachment refs without sending base64 through chat.send", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-attachment-refs-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.savedMediaResults = [
+      {
+        id: "cloud-image.png",
+        path: "/tmp/openclaw-media/inbound/cloud-image.png",
+        contentType: "image/png",
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-attachment-refs",
+      message: "describe this image",
+      requestParams: {
+        attachmentsV2: [
+          {
+            mimeType: "image/png",
+            fileName: "cloud.png",
+            source: {
+              type: "url",
+              url: "https://files.example.test/cloud.png",
+              headers: {
+                Authorization: "Bearer test",
+                Cookie: "must-not-propagate",
+              },
+            },
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { runId: "idem-user-transcript-attachment-refs", status: "started" },
+      undefined,
+      expect.objectContaining({ runId: "idem-user-transcript-attachment-refs" }),
+    );
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({
+        source: "https://files.example.test/cloud.png",
+        subdir: "inbound",
+      }),
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("media://inbound/cloud-image.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["media://inbound/cloud-image.png"]);
+
+    await waitForAssertion(() => {
+      const userUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      );
+      const message = userUpdate?.message as
+        | {
+            MediaPath?: string;
+            MediaPaths?: string[];
+            MediaType?: string;
+            MediaTypes?: string[];
+            attachments?: Array<{
+              type?: string;
+              fileName?: string;
+              mimeType?: string;
+              size?: number;
+              previewUrl?: string;
+            }>;
+          }
+        | undefined;
+      expect(message?.MediaPath).toBe("/tmp/openclaw-media/inbound/cloud-image.png");
+      expect(message?.MediaPaths).toEqual(["/tmp/openclaw-media/inbound/cloud-image.png"]);
+      expect(message?.MediaType).toBe("image/png");
+      expect(message?.MediaTypes).toEqual(["image/png"]);
+      expect(message?.attachments).toEqual([
+        expect.objectContaining({
+          type: "image",
+          fileName: "cloud.png",
+          mimeType: "image/png",
+          previewUrl: "media://inbound/cloud-image.png",
+        }),
+      ]);
     });
   });
 

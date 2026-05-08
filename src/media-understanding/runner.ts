@@ -111,6 +111,43 @@ function resolveConfiguredImageModel(params: {
   });
 }
 
+function resolveConfiguredProviderModel(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  modelId: string;
+}): { id?: string; input?: string[] } | undefined {
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg.models?.providers,
+    params.providerId,
+  ) as
+    | {
+        models?: Array<{
+          id?: string;
+          input?: string[];
+        }>;
+      }
+    | undefined;
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  if (!normalizedModelId) {
+    return undefined;
+  }
+  return providerCfg?.models?.find(
+    (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === normalizedModelId,
+  );
+}
+
+function configuredModelVisionStatus(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+  modelId: string;
+}): "supported" | "unsupported" | "unknown" {
+  const configured = resolveConfiguredProviderModel(params);
+  if (!configured) {
+    return "unknown";
+  }
+  return configured.input?.includes("image") ? "supported" : "unsupported";
+}
+
 function resolveCatalogImageModelId(params: {
   providerId: string;
   catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
@@ -131,9 +168,13 @@ async function explicitImageModelVisionStatus(params: {
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
-  const configured = resolveConfiguredImageModel(params);
-  if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
-    return "supported";
+  const configuredStatus = configuredModelVisionStatus({
+    cfg: params.cfg,
+    providerId: params.providerId,
+    modelId: params.model,
+  });
+  if (configuredStatus !== "unknown") {
+    return configuredStatus;
   }
   const catalog = await loadModelCatalog({ config: params.cfg });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
@@ -824,13 +865,23 @@ export async function runCapability(params: {
     activeProvider &&
     !hasExplicitImageUnderstandingConfig({ cfg, config })
   ) {
-    const catalog = await loadModelCatalog({ config: cfg });
-    const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
-    if (modelSupportsVision(entry)) {
+    const activeModel = params.activeModel?.model ?? "";
+    const configuredStatus = configuredModelVisionStatus({
+      cfg,
+      providerId: activeProvider,
+      modelId: activeModel,
+    });
+    const supportsVision =
+      configuredStatus === "supported" ||
+      (configuredStatus === "unknown" &&
+        modelSupportsVision(
+          findModelInCatalog(await loadModelCatalog({ config: cfg }), activeProvider, activeModel),
+        ));
+    if (supportsVision) {
       if (shouldLogVerbose()) {
         logVerbose("Skipping image understanding: primary model supports vision natively");
       }
-      const model = params.activeModel?.model?.trim();
+      const model = activeModel.trim();
       const reason = "primary model supports vision natively";
       return {
         outputs: [],

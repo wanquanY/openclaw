@@ -727,6 +727,80 @@ git merge upstream
   - CLI、embedded run 和 compaction 后续对话都保持同一身份语义。
 - 如果上游后续重构 agent prompt、bootstrap prompt、config schema 或生成文档，同步后必须先确认这条 host identity 链没有被静默截断。
 
+### 22. Channel catalog install、plugin permission persistence、attachment refs 与 runtime restart fingerprint
+
+涉及文件：
+
+- `src/gateway/server-methods/channels.ts`
+- `src/gateway/server-methods/channels.catalog-install.test.ts`
+- `src/gateway/protocol/schema/channels.ts`
+- `src/gateway/protocol/schema/protocol-schemas.ts`
+- `src/gateway/protocol/schema/types.ts`
+- `src/gateway/protocol/index.ts`
+- `src/gateway/server-methods-list.ts`
+- `src/gateway/method-scopes.ts`
+- `src/gateway/server.impl.ts`
+- `src/gateway/server-methods/attachment-refs.ts`
+- `src/gateway/server-methods/chat.ts`
+- `src/gateway/server-methods/chat.directive-tags.test.ts`
+- `src/config/types.installs.ts`
+- `src/config/zod-schema.installs.ts`
+- `src/config/runtime-schema.ts`
+- `src/plugins/install.ts`
+- `src/plugins/update.ts`
+- `src/plugins/install-security-scan.ts`
+- `src/plugins/install-security-scan.runtime.ts`
+- `src/plugins/install-security-scan.types.ts`
+- `src/plugins/manifest.ts`
+- `src/plugins/manifest-registry.ts`
+- `src/cli/plugins-install-command.ts`
+- `src/cli/plugins-update-command.ts`
+- `src/commands/channel-setup/plugin-install.ts`
+- `src/commands/onboarding-plugin-install.ts`
+- `src/agents/tools/computer-use-tool.ts`
+- `src/agents/tools/computer-use/gateway-normalizers.ts`
+- `src/agents/tools/computer-use/gateway-payloads.ts`
+- `src/computer-use/types.ts`
+- `src/media-understanding/runner.ts`
+- `src/media-understanding/runner.vision-skip.test.ts`
+- `scripts/run-node.mjs`
+- `scripts/run-node-build-inputs.mjs`
+- `scripts/build-stamp.mjs`
+- `scripts/postinstall-bundled-plugins.mjs`
+- `src/infra/run-node.test.ts`
+- `src/infra/build-stamp.test.ts`
+- `docs/cli/channels.md`
+- `docs/cli/plugins.md`
+- `docs/tools/plugin.md`
+- `docs/channels/wechat.md`
+- `docs/gateway/protocol.md`
+- `docs/gateway/security/index.md`
+- `docs/web/control-ui.md`
+
+必须确认：
+
+- `channels.catalog` 和 `channels.install` 仍然在 schema、method list、method scopes、protocol index 和 gateway handler 中成套注册，不能只加 handler 或只加 schema。
+- channel catalog install 必须继续通过 plugin install pipeline、manifest registry 和 install security scan，不能绕过 `approvedPluginPermissions` 或 marketplace / ClawHub / path / npm 安装记录持久化。
+- `approvedPluginPermissions` 只能保留当前明确支持的权限，例如 `process.exec`，并且必须写入 `installs.*.approvedPermissions`，供后续 plugin update / install record 复用。
+- onboarding 和 channel setup 的 plugin install 路径仍然复用同一套安装/审批语义，不能让 UI catalog 安装、CLI 安装和自动 onboarding 安装分叉。
+- `chat.send` 的 attachment refs 仍然只接受受信任 RPC 输入，并把 URL、base64、file source 转成保存后的 media 引用；URL headers 只能允许 Authorization 和 `x-*` 这类受控头，避免把任意 header 持久化。
+- Computer Use capture payload 仍然支持 `framePath / frameUrl / frameId`，OCR 请求和 tool result image content 不能只依赖内联 `base64Png`，否则桌面 host 的文件型截图会在模型上下文里丢失。
+- media-understanding runner 的 vision skip 逻辑仍然能识别已经处理或不可处理的图片/附件，不能在 attachment refs 进入 transcript 后重复消耗视觉模型。
+- `run-node` build requirement 仍然使用 build-relevant input fingerprint，dirty worktree 中如果运行输入未变，不应重复触发 rebuild；build stamp 必须写入同一 fingerprint。
+- bundled plugin postinstall hotfix 仍然同时执行 Baileys hotfix 和 Matrix crypto native binding 修复，不能因为其中一个已处理就提前 return。
+- Matrix crypto native binding 修复只在缺失或 Mach-O 不完整时下载对应平台 asset，并且下载结果必须先校验再替换 native binding。
+
+背景：
+
+- 这是 2026-05-08 为桌面/Control UI channel catalog 安装、插件权限审批持久化、附件引用 RPC、Computer Use 文件型截图和开发时 run-node rebuild 稳定性补充的本地能力。
+- 下游当前依赖的是：
+  - 用户能从 channel catalog 安装渠道插件，并且安全审批结果跟 CLI 安装保持一致。
+  - 桌面和 Web 客户端能通过 attachment refs 传入大附件，而不是把全部媒体都塞进 chat 文本或内联 payload。
+  - Computer Use host 可以返回 frame file/URL，agent 仍然能把截图交给模型和 OCR。
+  - 开发环境 dirty tree 不会因为无关文件变化反复 rebuild runtime。
+  - Matrix bundled runtime 在 postinstall 后具备可用的 native crypto binding。
+- 如果上游后续改 gateway protocol、plugin install/update、install scanner、chat attachment model、Computer Use capture payload、media understanding、run-node 或 postinstall 脚本，同步后必须先人工复核这里。
+
 ## 每次同步必须检查的范围
 
 每次同步都至少检查下面四层，不要只看 merge 有没有冲突。
@@ -778,6 +852,7 @@ rg -n "session-memory|generateSlug|transcript event|ghost reminder" src/hooks sr
 rg -n "browser_use|BrowserUseSessionConfig|browserUse|clientCapabilityBindings\\.browser_use|browser.action|browser.observe" src/browser-use src/agents src/auto-reply src/config src/gateway
 rg -n "InteractiveCapability|activation|approval_required|action-target-policy|computer\\.targets|computer\\.ocr|computer\\.cdp|appendSyntheticInterruptedToolResults|isSessionTranscriptResumable" src/interactive-capability src/browser-use src/computer-use src/agents src/gateway
 rg -n "hostProductIdentity|HostProductIdentity|buildHostProductIdentitySection|internalRuntimeVisibility|userFacingRuntimeName" src/agents src/config docs/gateway/config-agents.md
+rg -n "channels\\.catalog|channels\\.install|approvedPluginPermissions|approvedPermissions|ChannelCatalog|attachmentRefs|normalizeRpcAttachmentRefs|framePath|frameUrl|inputFingerprint|resolveRunNodeBuildInputFingerprint|matrix-sdk-crypto-nodejs" src scripts docs
 ```
 
 ### D. 验证范围
@@ -818,6 +893,7 @@ pnpm test -- \
   src/secrets/exec-secret-ref-id-parity.test.ts \
   src/config/zod-schema.agent-defaults.test.ts \
   src/gateway/server-methods/chat.directive-tags.test.ts \
+  src/gateway/server-methods/channels.catalog-install.test.ts \
   src/gateway/server-methods/chat.abort-persistence.test.ts \
   src/gateway/server-plugin-approval.e2e.test.ts \
   src/scripts/canvas-a2ui-copy.test.ts \
@@ -834,6 +910,9 @@ pnpm test -- \
   src/hooks/bundled/session-memory/handler.test.ts \
   src/hooks/llm-slug-generator.test.ts \
   src/infra/heartbeat-runner.ghost-reminder.test.ts \
+  src/infra/run-node.test.ts \
+  src/infra/build-stamp.test.ts \
+  src/media-understanding/runner.vision-skip.test.ts \
   src/plugins/capability-provider-runtime.test.ts \
   src/plugins/provider-runtime.test.ts \
   src/sessions/transcript-events.test.ts \

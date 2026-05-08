@@ -16,6 +16,7 @@ import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { normalizeRpcAttachmentRefs } from "./attachment-refs.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -542,6 +543,72 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
         mimeType: "image/png",
         fileName: undefined,
         content: "Zm9v",
+      },
+    ]);
+  });
+
+  it("accepts attachment refs with base64 source for local media staging", () => {
+    const refs = normalizeRpcAttachmentRefs([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "local.png",
+        size: 3,
+        source: {
+          type: "base64",
+          mediaType: "image/png",
+          data: "cG5n",
+        },
+      },
+    ]);
+
+    expect(refs).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "local.png",
+        size: 3,
+        fileId: undefined,
+        previewUrl: undefined,
+        source: {
+          type: "base64",
+          data: "cG5n",
+          mediaType: "image/png",
+        },
+      },
+    ]);
+  });
+
+  it("accepts attachment refs with local file source for trusted desktop staging", () => {
+    const refs = normalizeRpcAttachmentRefs([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "prompt.pdf",
+        size: 243_800,
+        fileId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        previewUrl:
+          "doxie-attachment://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        source: {
+          type: "file",
+          path: "/Users/test/Library/Application Support/com.doxie.client.dev/attachments/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/blob",
+        },
+      },
+    ]);
+
+    expect(refs).toEqual([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "prompt.pdf",
+        size: 243_800,
+        fileId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        previewUrl:
+          "doxie-attachment://0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        source: {
+          type: "file",
+          path: "/Users/test/Library/Application Support/com.doxie.client.dev/attachments/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/blob",
+        },
       },
     ]);
   });

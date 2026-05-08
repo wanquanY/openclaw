@@ -47,6 +47,15 @@ openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
 
+Operator clients can use the same native channel control plane without shelling
+out to the CLI:
+
+- `channels.catalog` lists installed and installable channel plugin entries.
+- `channels.install` installs a selected catalog channel plugin, enables it, and
+  persists any approved install permissions such as `process.exec`.
+- `channels.start`, `channels.logout`, and `channels.status` manage configured
+  accounts at runtime.
+
 Tip: `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
 
 Common non-interactive add surfaces include:

@@ -6,6 +6,15 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
 import {
+  isBuildRelevantRunNodePath,
+  isRestartRelevantRunNodePath,
+  resolveRunNodeBuildInputFingerprint,
+} from "./run-node-build-inputs.mjs";
+export {
+  isBuildRelevantRunNodePath,
+  isRestartRelevantRunNodePath,
+} from "./run-node-build-inputs.mjs";
+import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
@@ -32,10 +41,6 @@ const runtimePostBuildWatchedPaths = [
   "src/plugin-sdk/root-alias.cjs",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
-const ignoredRunNodeRepoPaths = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
 const runtimePostBuildScriptPaths = new Set(
   runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
 );
@@ -43,55 +48,9 @@ const runtimePostBuildStaticAssetPaths = new Set([
   "extensions/acpx/src/runtime-internals/mcp-proxy.mjs",
   "extensions/diffs/assets/viewer-runtime.js",
 ]);
-const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
 const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
-
-const isIgnoredSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
-
-const isBuildRelevantSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
-
-const isRestartRelevantExtensionPath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
-    return true;
-  }
-  return isBuildRelevantSourcePath(normalizedPath);
-};
-
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
-export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
-
-export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -222,18 +181,22 @@ const hasDirtyRuntimePostBuildInputs = (deps) => {
 const readJsonStamp = (filePath, deps) => {
   const mtime = statMtime(filePath, deps.fs);
   if (mtime == null) {
-    return { mtime: null, head: null };
+    return { mtime: null, head: null, inputFingerprint: null };
   }
   try {
     const raw = deps.fs.readFileSync(filePath, "utf8").trim();
     if (!raw.startsWith("{")) {
-      return { mtime, head: null };
+      return { mtime, head: null, inputFingerprint: null };
     }
     const parsed = JSON.parse(raw);
     const head = typeof parsed?.head === "string" && parsed.head.trim() ? parsed.head.trim() : null;
-    return { mtime, head };
+    const inputFingerprint =
+      typeof parsed?.inputFingerprint === "string" && parsed.inputFingerprint.trim()
+        ? parsed.inputFingerprint.trim()
+        : null;
+    return { mtime, head, inputFingerprint };
   } catch {
-    return { mtime, head: null };
+    return { mtime, head: null, inputFingerprint: null };
   }
 };
 
@@ -332,6 +295,14 @@ export const resolveBuildRequirement = (deps) => {
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
     if (dirty === true) {
+      const inputFingerprint = resolveRunNodeBuildInputFingerprint(deps);
+      if (
+        inputFingerprint &&
+        stamp.inputFingerprint &&
+        inputFingerprint === stamp.inputFingerprint
+      ) {
+        return { shouldBuild: false, reason: "clean" };
+      }
       return { shouldBuild: true, reason: "dirty_watched_tree" };
     }
     if (dirty === false) {
@@ -767,6 +738,7 @@ const writeBuildStamp = (deps) => {
       cwd: deps.cwd,
       fs: deps.fs,
       spawnSync: deps.spawnSync,
+      inputFingerprint: resolveRunNodeBuildInputFingerprint(deps),
     });
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.

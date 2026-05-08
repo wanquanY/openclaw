@@ -13,7 +13,9 @@ import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   ensureOnboardingPluginInstalled,
+  installOnboardingPluginFromNpmSpec,
   type OnboardingPluginInstallEntry,
+  type OnboardingPluginInstallNonInteractiveResult,
   type OnboardingPluginInstallStatus,
 } from "../onboarding-plugin-install.js";
 import { getTrustedChannelPluginCatalogEntry } from "./trusted-catalog.js";
@@ -41,6 +43,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  approvedPluginPermissions?: readonly string[];
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -48,6 +51,7 @@ export async function ensureChannelSetupPluginInstalled(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
+    approvedPluginPermissions: params.approvedPluginPermissions,
   });
   return {
     cfg: result.cfg,
@@ -55,6 +59,22 @@ export async function ensureChannelSetupPluginInstalled(params: {
     pluginId: result.pluginId,
     status: result.status,
   };
+}
+
+export async function installChannelSetupPluginFromCatalogEntry(params: {
+  cfg: OpenClawConfig;
+  entry: ChannelPluginCatalogEntry;
+  runtime: RuntimeEnv;
+  approvedPluginPermissions?: readonly string[];
+  timeoutMs?: number;
+}): Promise<OnboardingPluginInstallNonInteractiveResult> {
+  return await installOnboardingPluginFromNpmSpec({
+    cfg: params.cfg,
+    entry: toOnboardingPluginInstallEntry(params.entry),
+    runtime: params.runtime,
+    approvedPluginPermissions: params.approvedPluginPermissions,
+    timeoutMs: params.timeoutMs,
+  });
 }
 
 export function reloadChannelSetupPluginRegistry(params: {

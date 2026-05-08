@@ -1044,7 +1044,18 @@ export type PluginPackageInstall = {
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
+  permissions?: readonly PluginPackageInstallPermission[];
 };
+
+export type PluginPackageInstallPermission =
+  | PluginPackageInstallPermissionCapability
+  | {
+      capability: PluginPackageInstallPermissionCapability;
+      reason?: string;
+      commands?: readonly string[];
+    };
+
+export type PluginPackageInstallPermissionCapability = "process.exec";
 
 export type OpenClawPackageStartup = {
   /**

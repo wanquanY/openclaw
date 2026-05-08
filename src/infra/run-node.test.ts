@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveRunNodeBuildInputFingerprint } from "../../scripts/run-node-build-inputs.mjs";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
@@ -33,6 +34,9 @@ const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
 const EXTENSION_README = bundledPluginFile("demo", "README.md");
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
+const DIST_EXTENSION_ENTRY = bundledDistPluginFile("demo", "index.js");
+const DIST_EXTENSION_SRC_ENTRY = bundledDistPluginFile("demo", "src/index.js");
+const DIST_EXTENSION_NESTED_ENTRY = bundledDistPluginFile("demo", "nested/entry.js");
 
 const OLD_TIME = new Date("2026-03-13T10:00:00.000Z");
 const BUILD_TIME = new Date("2026-03-13T12:00:00.000Z");
@@ -335,6 +339,20 @@ describe("run-node script", () => {
       const spawnCalls: string[][] = [];
       const spawn = (cmd: string, args: string[]) => {
         spawnCalls.push([cmd, ...args]);
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+          fsSync.mkdirSync(path.dirname(resolvePath(tmp, DIST_EXTENSION_NESTED_ENTRY)), {
+            recursive: true,
+          });
+          fsSync.mkdirSync(path.dirname(resolvePath(tmp, DIST_EXTENSION_SRC_ENTRY)), {
+            recursive: true,
+          });
+          fsSync.writeFileSync(resolvePath(tmp, DIST_EXTENSION_SRC_ENTRY), "export {};\n", "utf8");
+          fsSync.writeFileSync(
+            resolvePath(tmp, DIST_EXTENSION_NESTED_ENTRY),
+            "export {};\n",
+            "utf8",
+          );
+        }
         return createExitedProcess(0);
       };
 
@@ -953,10 +971,11 @@ describe("run-node script", () => {
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
           [EXTENSION_PACKAGE]: '{"name":"demo","openclaw":{"extensions":["./index.ts"]}}\n',
           [ROOT_TSDOWN]: "export default {};\n",
+          [DIST_EXTENSION_ENTRY]: "export {};\n",
           [DIST_EXTENSION_PACKAGE]: '{"name":"demo","openclaw":{"extensions":["./stale.js"]}}\n',
         },
         oldPaths: [EXTENSION_MANIFEST, ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
-        buildPaths: [DIST_ENTRY, BUILD_STAMP, DIST_EXTENSION_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP, DIST_EXTENSION_ENTRY, DIST_EXTENSION_PACKAGE],
         newPaths: [EXTENSION_PACKAGE],
       });
 
@@ -1053,6 +1072,33 @@ describe("run-node script", () => {
       expect(requirement).toEqual({
         shouldBuild: true,
         reason: "dirty_watched_tree",
+      });
+    });
+  });
+
+  it("skips rebuilding dirty watched source trees when the build input fingerprint matches", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        buildPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const deps = createBuildRequirementDeps(tmp, {
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const inputFingerprint = resolveRunNodeBuildInputFingerprint(deps);
+      await fs.writeFile(
+        path.join(tmp, BUILD_STAMP),
+        `${JSON.stringify({ head: "abc123", inputFingerprint })}\n`,
+        "utf8",
+      );
+
+      expect(resolveBuildRequirement(deps)).toEqual({
+        shouldBuild: false,
+        reason: "clean",
       });
     });
   });

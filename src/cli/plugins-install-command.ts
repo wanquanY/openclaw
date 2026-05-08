@@ -49,6 +49,27 @@ function resolveInstallMode(force?: boolean): "install" | "update" {
 function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): InstallSafetyOverrides {
   return {
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
+    approvedPluginPermissions: overrides.approvedPluginPermissions,
+  };
+}
+
+function withApprovedPluginPermissions<T extends Record<string, unknown>>(
+  install: T,
+  approvedPermissions: readonly string[] | undefined,
+): T {
+  const normalized = Array.from(
+    new Set(
+      (approvedPermissions ?? [])
+        .map((permission) => permission.trim())
+        .filter((permission) => permission === "process.exec"),
+    ),
+  ).toSorted();
+  if (normalized.length === 0) {
+    return install;
+  }
+  return {
+    ...install,
+    approvedPermissions: normalized,
   };
 }
 
@@ -349,14 +370,17 @@ export async function runPluginInstallCommand(params: {
     await persistPluginInstall({
       config: cfg,
       pluginId: result.pluginId,
-      install: {
-        source: "marketplace",
-        installPath: result.targetDir,
-        version: result.version,
-        marketplaceName: result.marketplaceName,
-        marketplaceSource: result.marketplaceSource,
-        marketplacePlugin: result.marketplacePlugin,
-      },
+      install: withApprovedPluginPermissions(
+        {
+          source: "marketplace",
+          installPath: result.targetDir,
+          version: result.version,
+          marketplaceName: result.marketplaceName,
+          marketplaceSource: result.marketplaceSource,
+          marketplacePlugin: result.marketplacePlugin,
+        },
+        result.approvedPermissions,
+      ),
     });
     return;
   }
@@ -408,12 +432,15 @@ export async function runPluginInstallCommand(params: {
           },
         },
         pluginId: probe.pluginId,
-        install: {
-          source: "path",
-          sourcePath: resolved,
-          installPath: resolved,
-          version: probe.version,
-        },
+        install: withApprovedPluginPermissions(
+          {
+            source: "path",
+            sourcePath: resolved,
+            installPath: resolved,
+            version: probe.version,
+          },
+          probe.approvedPermissions,
+        ),
         successMessage: `Linked plugin path: ${shortenHomePath(resolved)}`,
       });
       return;
@@ -450,12 +477,15 @@ export async function runPluginInstallCommand(params: {
     await persistPluginInstall({
       config: cfg,
       pluginId: result.pluginId,
-      install: {
-        source,
-        sourcePath: resolved,
-        installPath: result.targetDir,
-        version: result.version,
-      },
+      install: withApprovedPluginPermissions(
+        {
+          source,
+          sourcePath: resolved,
+          installPath: result.targetDir,
+          version: result.version,
+        },
+        result.approvedPermissions,
+      ),
     });
     return;
   }
@@ -512,21 +542,24 @@ export async function runPluginInstallCommand(params: {
     await persistPluginInstall({
       config: cfg,
       pluginId: result.pluginId,
-      install: {
-        source: "clawhub",
-        spec: formatClawHubSpecifier({
-          name: result.clawhub.clawhubPackage,
-          version: result.clawhub.version,
-        }),
-        installPath: result.targetDir,
-        version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
-      },
+      install: withApprovedPluginPermissions(
+        {
+          source: "clawhub",
+          spec: formatClawHubSpecifier({
+            name: result.clawhub.clawhubPackage,
+            version: result.clawhub.version,
+          }),
+          installPath: result.targetDir,
+          version: result.version,
+          integrity: result.clawhub.integrity,
+          resolvedAt: result.clawhub.resolvedAt,
+          clawhubUrl: result.clawhub.clawhubUrl,
+          clawhubPackage: result.clawhub.clawhubPackage,
+          clawhubFamily: result.clawhub.clawhubFamily,
+          clawhubChannel: result.clawhub.clawhubChannel,
+        },
+        result.approvedPermissions,
+      ),
     });
     return;
   }
@@ -544,21 +577,24 @@ export async function runPluginInstallCommand(params: {
       await persistPluginInstall({
         config: cfg,
         pluginId: clawhubResult.pluginId,
-        install: {
-          source: "clawhub",
-          spec: formatClawHubSpecifier({
-            name: clawhubResult.clawhub.clawhubPackage,
-            version: clawhubResult.clawhub.version,
-          }),
-          installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        },
+        install: withApprovedPluginPermissions(
+          {
+            source: "clawhub",
+            spec: formatClawHubSpecifier({
+              name: clawhubResult.clawhub.clawhubPackage,
+              version: clawhubResult.clawhub.version,
+            }),
+            installPath: clawhubResult.targetDir,
+            version: clawhubResult.version,
+            integrity: clawhubResult.clawhub.integrity,
+            resolvedAt: clawhubResult.clawhub.resolvedAt,
+            clawhubUrl: clawhubResult.clawhub.clawhubUrl,
+            clawhubPackage: clawhubResult.clawhub.clawhubPackage,
+            clawhubFamily: clawhubResult.clawhub.clawhubFamily,
+            clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+          },
+          clawhubResult.approvedPermissions,
+        ),
       });
       return;
     }
@@ -622,6 +658,6 @@ export async function runPluginInstallCommand(params: {
   await persistPluginInstall({
     config: cfg,
     pluginId: result.pluginId,
-    install: installRecord,
+    install: withApprovedPluginPermissions(installRecord, result.approvedPermissions),
   });
 }

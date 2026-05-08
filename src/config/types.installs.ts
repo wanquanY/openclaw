@@ -11,6 +11,7 @@ export type InstallRecordBase = {
   shasum?: string;
   resolvedAt?: string;
   installedAt?: string;
+  approvedPermissions?: string[];
   clawhubUrl?: string;
   clawhubPackage?: string;
   clawhubFamily?: "code-plugin" | "bundle-plugin";

@@ -168,6 +168,35 @@ describe("plugins cli update", () => {
     );
   });
 
+  it("passes approved plugin permissions to plugin updates", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "openclaw-weixin",
+      spec: "@tencent-weixin/openclaw-weixin@2.1.1",
+    });
+    loadConfig.mockReturnValue(config);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "update",
+      "openclaw-weixin",
+      "--approve-plugin-permission",
+      "process.exec",
+    ]);
+
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        pluginIds: ["openclaw-weixin"],
+        approvedPluginPermissions: ["process.exec"],
+      }),
+    );
+  });
+
   it("writes updated config when updater reports changes", async () => {
     const cfg = {
       plugins: {

@@ -105,6 +105,12 @@ import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import {
+  normalizeRpcAttachmentRefs,
+  stageChatAttachmentRefs,
+  type ChatAttachmentRef,
+  type RpcAttachmentRefInput,
+} from "./attachment-refs.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import {
   buildWebchatAssistantMessageFromReplyPayloads,
@@ -754,19 +760,56 @@ async function persistChatSendImages(params: {
 function buildChatSendTranscriptMessage(params: {
   message: string;
   savedImages: SavedMedia[];
+  attachmentRefs?: ChatAttachmentRef[];
   timestamp: number;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  const attachments = buildChatSendTranscriptAttachments({
+    savedImages: params.savedImages,
+    attachmentRefs: params.attachmentRefs ?? [],
+  });
   return {
     role: "user" as const,
     content: params.message,
     timestamp: params.timestamp,
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...mediaFields,
   };
 }
 
-function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
-  const mediaPaths = savedImages.map((entry) => entry.path);
+function buildChatSendTranscriptAttachments(params: {
+  savedImages: SavedMedia[];
+  attachmentRefs: ChatAttachmentRef[];
+}) {
+  const refOffset = Math.max(0, params.savedImages.length - params.attachmentRefs.length);
+  return params.savedImages.map((saved, index) => {
+    const ref = index >= refOffset ? params.attachmentRefs[index - refOffset] : undefined;
+    const mimeType = ref?.mimeType || saved.contentType || "application/octet-stream";
+    const fileName =
+      ref?.fileName ||
+      saved.id.split("/").filter(Boolean).pop() ||
+      (mimeType.startsWith("image/") ? "image" : "attachment");
+    const previewUrl =
+      ref?.previewUrl ||
+      (mimeType.startsWith("image/") ? `media://inbound/${saved.id}` : undefined);
+    return {
+      type: ref?.type || (mimeType.startsWith("image/") ? "image" : "file"),
+      fileName,
+      mimeType,
+      size: ref?.size ?? saved.size,
+      ...(ref?.fileId ? { fileId: ref.fileId } : {}),
+      ...(previewUrl ? { previewUrl } : {}),
+    };
+  });
+}
+
+function resolveChatSendTranscriptMediaFields(
+  savedImages: SavedMedia[],
+  options?: { pathMode?: "absolute" | "media-uri" },
+) {
+  const mediaPaths = savedImages.map((entry) =>
+    options?.pathMode === "media-uri" ? `media://inbound/${entry.id}` : entry.path,
+  );
   if (mediaPaths.length === 0) {
     return {};
   }
@@ -2599,6 +2642,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         fileName?: string;
         content?: unknown;
       }>;
+      attachmentsV2?: RpcAttachmentRefInput[];
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
@@ -2653,8 +2697,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const systemProvenanceReceipt = systemReceiptResult.receipt;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
+    const normalizedAttachmentRefs = normalizeRpcAttachmentRefs(p.attachmentsV2);
     const rawMessage = inboundMessage.trim();
-    if (!rawMessage && normalizedAttachments.length === 0) {
+    if (
+      !rawMessage &&
+      normalizedAttachments.length === 0 &&
+      normalizedAttachmentRefs.length === 0
+    ) {
       respond(
         false,
         undefined,
@@ -2922,6 +2971,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           hasComputerUse: Boolean(normalizedComputerUse),
           hasBrowserUse: Boolean(normalizedBrowserUse),
           attachmentCount: normalizedAttachments.length,
+          attachmentRefCount: normalizedAttachmentRefs.length,
         })}`,
       );
       const runTimingStartedAt = Date.now();
@@ -2944,19 +2994,73 @@ export const chatHandlers: GatewayRequestHandlers = {
       emitRunTiming("post_ack_start", {
         preAckTotalMs: runTimingStartedAt - timingStartedAt,
         attachmentCount: normalizedAttachments.length,
+        attachmentRefCount: normalizedAttachmentRefs.length,
         hasComputerUse: Boolean(normalizedComputerUse),
         hasBrowserUse: Boolean(normalizedBrowserUse),
       });
-      const persistedImagesPromise = persistChatSendImages({
+      const legacyPersistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
         offloadedRefs,
         client,
         logGateway: context.logGateway,
       });
-      const pluginBoundMediaFields =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? resolveChatSendTranscriptMediaFields(await persistedImagesPromise)
+      const attachmentRefMediaPromise = isAcpBridgeClient(client)
+        ? Promise.resolve([] as SavedMedia[])
+        : stageChatAttachmentRefs({
+            refs: normalizedAttachmentRefs,
+            maxBytes: 5_000_000,
+            log: context.logGateway,
+          });
+      let attachmentRefMedia: SavedMedia[] = [];
+      try {
+        attachmentRefMedia = await attachmentRefMediaPromise;
+      } catch (err) {
+        emitRunTiming("attachment_refs_failed", {
+          error: String(err),
+          attachmentRefCount: normalizedAttachmentRefs.length,
+        });
+        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: String(err),
+            },
+            error,
+          },
+        });
+        broadcastChatError({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          errorMessage: String(err),
+        });
+        void legacyPersistedImagesPromise.catch((legacyErr) => {
+          context.logGateway.warn(
+            `chat.send: legacy image staging also failed after attachment ref failure: ${formatForLog(legacyErr)}`,
+          );
+        });
+        context.chatAbortControllers.delete(clientRunId);
+        return;
+      }
+      const persistedImagesPromise = legacyPersistedImagesPromise.then((savedImages) => [
+        ...savedImages,
+        ...attachmentRefMedia,
+      ]);
+      const pluginMediaFields = explicitOriginTargetsPlugin
+        ? resolveChatSendTranscriptMediaFields(await persistedImagesPromise)
+        : {};
+      const attachmentRefMediaFields =
+        normalizedAttachmentRefs.length > 0
+          ? resolveChatSendTranscriptMediaFields(attachmentRefMedia, {
+              pathMode: "media-uri",
+            })
           : {};
 
       const trimmedMessage = parsedMessage.trim();
@@ -3010,7 +3114,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes ?? [],
-        ...pluginBoundMediaFields,
+        ...pluginMediaFields,
+        ...attachmentRefMediaFields,
       };
 
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -3048,6 +3153,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             message: buildChatSendTranscriptMessage({
               message: parsedMessage,
               savedImages: persistedImages,
+              attachmentRefs: normalizedAttachmentRefs,
               timestamp: now,
             }),
           });

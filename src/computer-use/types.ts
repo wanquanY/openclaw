@@ -162,6 +162,7 @@ export type ComputerUseTargetBinding = {
 export type ComputerUseFrameArtifactRef = {
   artifactId: string;
   previewUrl?: string;
+  filePath?: string;
   width?: number;
   height?: number;
   capturedAt?: string;

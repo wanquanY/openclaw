@@ -566,6 +566,44 @@ describe("plugins cli install", () => {
     );
   });
 
+  it("passes approved plugin permissions to npm installs and records approved permissions", async () => {
+    primeNpmPluginFallback();
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: cliInstallPath("demo"),
+      version: "1.2.3",
+      npmResolution: {
+        packageName: "demo",
+        resolvedVersion: "1.2.3",
+        tarballUrl: "https://registry.npmjs.org/demo/-/demo-1.2.3.tgz",
+      },
+      approvedPermissions: ["process.exec"],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "demo",
+      "--approve-plugin-permission",
+      "process.exec",
+    ]);
+
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "demo",
+        approvedPluginPermissions: ["process.exec"],
+      }),
+    );
+    expect(recordPluginInstall).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        pluginId: "demo",
+        approvedPermissions: ["process.exec"],
+      }),
+    );
+  });
+
   it("passes dangerous force unsafe install to linked path probe installs", async () => {
     const cfg = {
       plugins: {

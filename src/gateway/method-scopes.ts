@@ -72,6 +72,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
     "logs.tail",
+    "channels.catalog",
     "channels.status",
     "status",
     "usage.status",
@@ -162,6 +163,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
   [ADMIN_SCOPE]: [
     "channels.start",
+    "channels.install",
     "channels.logout",
     "agents.create",
     "agents.update",

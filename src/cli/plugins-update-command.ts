@@ -12,7 +12,12 @@ import { promptYesNo } from "./prompt.js";
 
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
+  opts: {
+    all?: boolean;
+    dryRun?: boolean;
+    dangerouslyForceUnsafeInstall?: boolean;
+    approvedPluginPermissions?: string[];
+  };
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = loadConfig();
@@ -46,6 +51,7 @@ export async function runPluginUpdateCommand(params: {
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
     dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
+    approvedPluginPermissions: params.opts.approvedPluginPermissions,
     logger,
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;

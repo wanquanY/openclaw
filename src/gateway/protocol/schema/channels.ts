@@ -132,6 +132,16 @@ export const ChannelsStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ChannelInstallSourceSchema = Type.Object(
+  {
+    npmSpec: NonEmptyString,
+    defaultChoice: Type.Optional(Type.String()),
+    minHostVersion: Type.Optional(Type.String()),
+    expectedIntegrity: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 // Channel docking: channels.status is intentionally schema-light so new
 // channels can ship without protocol updates.
 export const ChannelAccountSnapshotSchema = Type.Object(
@@ -180,6 +190,61 @@ export const ChannelUiMetaSchema = Type.Object(
     label: NonEmptyString,
     detailLabel: NonEmptyString,
     systemImage: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelCatalogEntrySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    pluginId: Type.Optional(Type.String()),
+    label: NonEmptyString,
+    detailLabel: NonEmptyString,
+    systemImage: Type.Optional(Type.String()),
+    blurb: Type.Optional(Type.String()),
+    docsPath: Type.Optional(Type.String()),
+    installed: Type.Boolean(),
+    configured: Type.Boolean(),
+    install: ChannelInstallSourceSchema,
+    installSource: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsCatalogParamsSchema = Type.Object(
+  {
+    includeInstalled: Type.Optional(Type.Boolean()),
+    includeInstallable: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsCatalogResultSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    entries: Type.Array(ChannelCatalogEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsInstallParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    approvedPluginPermissions: Type.Optional(Type.Array(Type.String())),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsInstallResultSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    pluginId: NonEmptyString,
+    installed: Type.Boolean(),
+    alreadyInstalled: Type.Boolean(),
+    targetDir: Type.Optional(Type.String()),
+    version: Type.Optional(Type.String()),
+    approvedPermissions: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );

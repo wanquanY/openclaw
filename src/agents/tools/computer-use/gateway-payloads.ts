@@ -77,6 +77,9 @@ export type GatewayComputerPerceptionContextPayload = {
   height?: number;
   mimeType?: string;
   base64Png?: string;
+  frameId?: string;
+  framePath?: string;
+  frameUrl?: string;
   capturedAt?: string;
   target?: GatewayComputerTargetBindingPayload | null;
   diagnostics?: GatewayComputerDiagnosticsPayload | null;
@@ -85,6 +88,9 @@ export type GatewayComputerPerceptionContextPayload = {
 export type GatewayComputerCapturePayload = GatewayComputerPerceptionContextPayload & {
   mimeType?: string;
   base64Png?: string;
+  frameId?: string;
+  framePath?: string;
+  frameUrl?: string;
 };
 
 export type GatewayComputerActionPayload = {

@@ -719,6 +719,46 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("derives channel config metadata from legacy package channel metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "external-chat",
+        rootDir: dir,
+        origin: "global",
+        packageManifest: {
+          channel: {
+            id: "external-chat",
+            label: "External Chat",
+            blurb: "Legacy package channel metadata",
+            preferOver: ["bundled-chat"],
+          },
+        },
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.channelConfigs?.["external-chat"]).toMatchObject({
+      label: "External Chat",
+      description: "Legacy package channel metadata",
+      preferOver: ["bundled-chat"],
+      schema: {
+        type: "object",
+        additionalProperties: true,
+      },
+    });
+    expect(
+      registry.diagnostics.some((diagnostic) =>
+        diagnostic.message.includes("without channelConfigs metadata"),
+      ),
+    ).toBe(false);
+  });
+
   it("sanitizes manifest-controlled fields in channel config descriptor diagnostics", () => {
     const dir = makeTempDir();
     const lineBreak = String.fromCharCode(10);

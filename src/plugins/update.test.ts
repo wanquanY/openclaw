@@ -878,6 +878,44 @@ describe("updateNpmInstalledPlugins", () => {
       }),
     );
   });
+
+  it("reuses and persists approved plugin permissions during updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ...createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+      approvedPermissions: ["process.exec"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "openclaw-codex-app-server": {
+              source: "npm",
+              spec: "openclaw-codex-app-server@beta",
+              installPath: "/tmp/openclaw-codex-app-server",
+              approvedPermissions: ["process.exec"],
+            },
+          },
+        },
+      },
+      pluginIds: ["openclaw-codex-app-server"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        approvedPluginPermissions: ["process.exec"],
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+      approvedPermissions: ["process.exec"],
+    });
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {

@@ -98,6 +98,39 @@ when the built-in scanner reports `critical` findings, but it does **not**
 bypass plugin `before_install` hook policy blocks and does **not** bypass scan
 failures.
 
+Plugins that intentionally need a sensitive install capability must declare it
+in `package.json` and the installer must approve that declared capability:
+
+```json
+{
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "install": {
+      "permissions": [
+        {
+          "capability": "process.exec",
+          "reason": "Launches the vendor desktop bridge during channel setup.",
+          "commands": ["vendor-cli"]
+        }
+      ]
+    }
+  }
+}
+```
+
+```bash
+openclaw plugins install @vendor/plugin --approve-plugin-permission process.exec
+openclaw plugins update @vendor/plugin --approve-plugin-permission process.exec
+```
+
+This is the normal path for plugins whose install/runtime entry code contains a
+scanner-detected process execution primitive such as `child_process`. If the
+package does not declare the capability, or the installer does not approve it,
+the install stays blocked. Approved permissions are stored in the plugin install
+record so later inventory and update flows can reason about the trust decision.
+Updates reuse previously approved permissions; pass `--approve-plugin-permission`
+again only when a new version introduces an additional declared capability.
+
 This CLI flag applies to plugin install/update flows. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override, while `openclaw skills install` remains a separate ClawHub skill

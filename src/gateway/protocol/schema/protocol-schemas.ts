@@ -52,6 +52,10 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ChannelsCatalogParamsSchema,
+  ChannelsCatalogResultSchema,
+  ChannelsInstallParamsSchema,
+  ChannelsInstallResultSchema,
   ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
@@ -319,6 +323,10 @@ export const ProtocolSchemas = {
   TalkSpeakResult: TalkSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsCatalogParams: ChannelsCatalogParamsSchema,
+  ChannelsCatalogResult: ChannelsCatalogResultSchema,
+  ChannelsInstallParams: ChannelsInstallParamsSchema,
+  ChannelsInstallResult: ChannelsInstallResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,

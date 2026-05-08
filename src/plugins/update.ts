@@ -114,6 +114,31 @@ type InstallIntegrityDrift = {
   };
 };
 
+function normalizeApprovedPluginPermissions(permissions: readonly string[] | undefined): string[] {
+  return Array.from(
+    new Set(
+      (permissions ?? [])
+        .map((permission) => permission.trim())
+        .filter((permission) => permission === "process.exec"),
+    ),
+  ).toSorted();
+}
+
+function mergeApprovedPluginPermissions(
+  ...permissionSets: Array<readonly string[] | undefined>
+): string[] {
+  return normalizeApprovedPluginPermissions(
+    permissionSets.flatMap((permissions) => permissions ?? []),
+  );
+}
+
+function approvedPluginPermissionFields(permissions: readonly string[] | undefined): {
+  approvedPermissions?: string[];
+} {
+  const approvedPermissions = normalizeApprovedPluginPermissions(permissions);
+  return approvedPermissions.length > 0 ? { approvedPermissions } : {};
+}
+
 function stringFieldMatches(recorded: string | undefined, resolved: string | undefined): boolean {
   return !recorded || (resolved !== undefined && recorded === resolved);
 }
@@ -445,6 +470,7 @@ export async function updateNpmInstalledPlugins(params: {
   skipIds?: Set<string>;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
+  approvedPluginPermissions?: string[];
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateSummary> {
@@ -521,6 +547,10 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const approvedPluginPermissions = mergeApprovedPluginPermissions(
+      record.approvedPermissions,
+      params.approvedPluginPermissions,
+    );
     let installPath: string;
     try {
       installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
@@ -573,6 +603,7 @@ export async function updateNpmInstalledPlugins(params: {
                 mode: "update",
                 dryRun: true,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                approvedPluginPermissions,
                 expectedPluginId: pluginId,
                 expectedIntegrity,
                 onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -590,6 +621,7 @@ export async function updateNpmInstalledPlugins(params: {
                   mode: "update",
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                  approvedPluginPermissions,
                   expectedPluginId: pluginId,
                   logger,
                 })
@@ -599,6 +631,7 @@ export async function updateNpmInstalledPlugins(params: {
                   mode: "update",
                   dryRun: true,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                  approvedPluginPermissions,
                   expectedPluginId: pluginId,
                   logger,
                 });
@@ -673,6 +706,7 @@ export async function updateNpmInstalledPlugins(params: {
               spec: effectiveSpec!,
               mode: "update",
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+              approvedPluginPermissions,
               expectedPluginId: pluginId,
               expectedIntegrity,
               onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
@@ -689,6 +723,7 @@ export async function updateNpmInstalledPlugins(params: {
                 baseUrl: record.clawhubUrl,
                 mode: "update",
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                approvedPluginPermissions,
                 expectedPluginId: pluginId,
                 logger,
               })
@@ -697,6 +732,7 @@ export async function updateNpmInstalledPlugins(params: {
                 plugin: record.marketplacePlugin!,
                 mode: "update",
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+                approvedPluginPermissions,
                 expectedPluginId: pluginId,
                 logger,
               });
@@ -752,6 +788,7 @@ export async function updateNpmInstalledPlugins(params: {
         installPath: result.targetDir,
         version: nextVersion,
         ...buildNpmResolutionInstallFields(result.npmResolution),
+        ...approvedPluginPermissionFields(result.approvedPermissions),
       });
     } else if (record.source === "clawhub") {
       const clawhubResult = result as Extract<
@@ -770,6 +807,7 @@ export async function updateNpmInstalledPlugins(params: {
         clawhubPackage: clawhubResult.clawhub.clawhubPackage,
         clawhubFamily: clawhubResult.clawhub.clawhubFamily,
         clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+        ...approvedPluginPermissionFields(result.approvedPermissions),
       });
     } else {
       const marketplaceResult = result as Extract<
@@ -784,6 +822,7 @@ export async function updateNpmInstalledPlugins(params: {
         marketplaceName: marketplaceResult.marketplaceName ?? record.marketplaceName,
         marketplaceSource: record.marketplaceSource,
         marketplacePlugin: record.marketplacePlugin,
+        ...approvedPluginPermissionFields(result.approvedPermissions),
       });
     }
     changed = true;

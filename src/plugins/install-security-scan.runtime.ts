@@ -72,6 +72,8 @@ type PluginInstallRequestKind =
   | "plugin-file"
   | "plugin-npm";
 
+type PluginInstallPermission = "process.exec";
+
 type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -113,6 +115,65 @@ function buildCriticalBlockReason(params: {
 
 function buildScanFailureBlockReason(params: { error: string; targetLabel: string }) {
   return `${params.targetLabel} blocked: code safety scan failed (${params.error}). Run "openclaw security audit --deep" for details.`;
+}
+
+function permissionForCriticalFinding(
+  finding: Pick<InstallScanFinding, "ruleId">,
+): PluginInstallPermission | undefined {
+  if (finding.ruleId === "dangerous-exec") {
+    return "process.exec";
+  }
+  return undefined;
+}
+
+function declaredApprovedPermissionsCoverCriticalFindings(params: {
+  findings: InstallScanFinding[];
+  declaredPluginPermissions?: readonly string[];
+  approvedPluginPermissions?: readonly string[];
+}): boolean {
+  const declared = new Set(params.declaredPluginPermissions ?? []);
+  const approved = new Set(params.approvedPluginPermissions ?? []);
+  for (const finding of params.findings.filter((entry) => entry.severity === "critical")) {
+    const permission = permissionForCriticalFinding(finding);
+    if (!permission || !declared.has(permission) || !approved.has(permission)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildMissingPermissionDetails(params: {
+  findings: InstallScanFinding[];
+  declaredPluginPermissions?: readonly string[];
+  approvedPluginPermissions?: readonly string[];
+}): string {
+  const declared = new Set(params.declaredPluginPermissions ?? []);
+  const approved = new Set(params.approvedPluginPermissions ?? []);
+  const missing = new Set<string>();
+  const undeclared = new Set<string>();
+  for (const finding of params.findings.filter((entry) => entry.severity === "critical")) {
+    const permission = permissionForCriticalFinding(finding);
+    if (!permission) {
+      continue;
+    }
+    if (!declared.has(permission)) {
+      undeclared.add(permission);
+      continue;
+    }
+    if (!approved.has(permission)) {
+      missing.add(permission);
+    }
+  }
+  const parts: string[] = [];
+  if (undeclared.size > 0) {
+    parts.push(`undeclared permissions: ${Array.from(undeclared).join(", ")}`);
+  }
+  if (missing.size > 0) {
+    parts.push(
+      `approve declared permissions with --approve-plugin-permission ${Array.from(missing).join(" --approve-plugin-permission ")}`,
+    );
+  }
+  return parts.length > 0 ? ` (${parts.join("; ")})` : "";
 }
 
 function buildBlockedDependencyManifestLabel(params: {
@@ -502,6 +563,8 @@ async function scanDirectoryTarget(params: {
 
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
+  declaredPluginPermissions?: readonly string[];
+  approvedPluginPermissions?: readonly string[];
   dangerouslyForceUnsafeInstall?: boolean;
   targetLabel: string;
 }): InstallSecurityScanResult | undefined {
@@ -520,13 +583,28 @@ function buildBlockedScanResult(params: {
     if (params.dangerouslyForceUnsafeInstall) {
       return undefined;
     }
+    if (
+      declaredApprovedPermissionsCoverCriticalFindings({
+        findings: params.builtinScan.findings,
+        declaredPluginPermissions: params.declaredPluginPermissions,
+        approvedPluginPermissions: params.approvedPluginPermissions,
+      })
+    ) {
+      return undefined;
+    }
     return {
       blocked: {
         code: "security_scan_blocked",
-        reason: buildCriticalBlockReason({
-          findings: params.builtinScan.findings,
-          targetLabel: params.targetLabel,
-        }),
+        reason:
+          buildCriticalBlockReason({
+            findings: params.builtinScan.findings,
+            targetLabel: params.targetLabel,
+          }) +
+          buildMissingPermissionDetails({
+            findings: params.builtinScan.findings,
+            declaredPluginPermissions: params.declaredPluginPermissions,
+            approvedPluginPermissions: params.approvedPluginPermissions,
+          }),
       },
     };
   }
@@ -546,12 +624,15 @@ function logDangerousForceUnsafeInstall(params: {
 function resolveBuiltinScanDecision(
   params: InstallSafetyOverrides & {
     builtinScan: BuiltinInstallScan;
+    declaredPluginPermissions?: readonly string[];
     logger: InstallScanLogger;
     targetLabel: string;
   },
 ): InstallSecurityScanResult | undefined {
   const builtinBlocked = buildBlockedScanResult({
     builtinScan: params.builtinScan,
+    declaredPluginPermissions: params.declaredPluginPermissions,
+    approvedPluginPermissions: params.approvedPluginPermissions,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: params.targetLabel,
   });
@@ -709,6 +790,7 @@ export async function scanBundleInstallSourceRuntime(
 
 export async function scanPackageInstallSourceRuntime(
   params: InstallSafetyOverrides & {
+    declaredPluginPermissions?: readonly string[];
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
@@ -757,6 +839,8 @@ export async function scanPackageInstallSourceRuntime(
   });
   const builtinBlocked = resolveBuiltinScanDecision({
     builtinScan,
+    declaredPluginPermissions: params.declaredPluginPermissions,
+    approvedPluginPermissions: params.approvedPluginPermissions,
     logger: params.logger,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,

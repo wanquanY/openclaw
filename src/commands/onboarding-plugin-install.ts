@@ -8,6 +8,7 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import type { ApprovedPluginPermission } from "../plugins/install.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
@@ -34,6 +35,24 @@ export type OnboardingPluginInstallResult = {
   pluginId: string;
   status: OnboardingPluginInstallStatus;
 };
+
+export type OnboardingPluginInstallNonInteractiveResult =
+  | {
+      ok: true;
+      cfg: OpenClawConfig;
+      pluginId: string;
+      installed: boolean;
+      targetDir?: string;
+      version?: string;
+      approvedPermissions?: ApprovedPluginPermission[];
+    }
+  | {
+      ok: false;
+      cfg: OpenClawConfig;
+      pluginId: string;
+      error: string;
+      status: OnboardingPluginInstallStatus;
+    };
 
 function resolveRealDirectory(dir: string): string | null {
   try {
@@ -357,6 +376,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
   npmSpec: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  approvedPluginPermissions?: readonly string[];
 }): Promise<
   | { status: "timed_out" }
   | {
@@ -380,6 +400,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
         spec: params.npmSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        approvedPluginPermissions: params.approvedPluginPermissions,
         logger: {
           info: updateProgress,
           warn: (message) => {
@@ -421,6 +442,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  approvedPluginPermissions?: readonly string[];
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -504,6 +526,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     npmSpec,
     prompter,
     runtime,
+    approvedPluginPermissions: params.approvedPluginPermissions,
   });
 
   if (installOutcome.status === "timed_out") {
@@ -550,6 +573,9 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: npmSpec,
       installPath: result.targetDir,
       version: result.version,
+      ...(result.approvedPermissions && result.approvedPermissions.length > 0
+        ? { approvedPermissions: result.approvedPermissions }
+        : {}),
       ...buildNpmResolutionInstallFields(result.npmResolution),
     });
     return {
@@ -607,4 +633,90 @@ export async function ensureOnboardingPluginInstalled(params: {
     pluginId: entry.pluginId,
     status: "failed",
   };
+}
+
+export async function installOnboardingPluginFromNpmSpec(params: {
+  cfg: OpenClawConfig;
+  entry: OnboardingPluginInstallEntry;
+  runtime: RuntimeEnv;
+  approvedPluginPermissions?: readonly string[];
+  timeoutMs?: number;
+}): Promise<OnboardingPluginInstallNonInteractiveResult> {
+  let next = params.cfg;
+  const npmSpec = resolveNpmSpecForOnboarding(params.entry.install);
+  if (!npmSpec) {
+    return {
+      ok: false,
+      cfg: next,
+      pluginId: params.entry.pluginId,
+      error: `No npm install source is available for ${sanitizeTerminalText(params.entry.label)}.`,
+      status: "failed",
+    };
+  }
+
+  try {
+    const result = await installPluginFromNpmSpec({
+      spec: npmSpec,
+      timeoutMs: params.timeoutMs ?? ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+      expectedIntegrity: params.entry.install.expectedIntegrity,
+      approvedPluginPermissions: params.approvedPluginPermissions,
+      logger: {
+        info: (message) => params.runtime.log?.(sanitizeTerminalText(message)),
+        warn: (message) => params.runtime.log?.(sanitizeTerminalText(message)),
+      },
+    });
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        cfg: next,
+        pluginId: params.entry.pluginId,
+        error: result.error,
+        status: "failed",
+      };
+    }
+
+    const enableResult = enablePluginInConfig(next, result.pluginId);
+    if (!enableResult.enabled) {
+      return {
+        ok: false,
+        cfg: enableResult.config,
+        pluginId: result.pluginId,
+        error: enableResult.reason ?? "plugin disabled",
+        status: "failed",
+      };
+    }
+
+    next = recordPluginInstall(enableResult.config, {
+      pluginId: result.pluginId,
+      source: "npm",
+      spec: npmSpec,
+      installPath: result.targetDir,
+      version: result.version,
+      ...(result.approvedPermissions && result.approvedPermissions.length > 0
+        ? { approvedPermissions: result.approvedPermissions }
+        : {}),
+      ...buildNpmResolutionInstallFields(result.npmResolution),
+    });
+
+    return {
+      ok: true,
+      cfg: next,
+      pluginId: result.pluginId,
+      installed: true,
+      targetDir: result.targetDir,
+      version: result.version,
+      ...(result.approvedPermissions && result.approvedPermissions.length > 0
+        ? { approvedPermissions: result.approvedPermissions }
+        : {}),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      cfg: next,
+      pluginId: params.entry.pluginId,
+      error: error instanceof Error ? error.message : String(error),
+      status: isTimeoutError(error) ? "timed_out" : "failed",
+    };
+  }
 }

@@ -194,11 +194,13 @@ function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<st
 async function installFromDirWithWarnings(params: {
   pluginDir: string;
   extensionsDir: string;
+  approvedPluginPermissions?: string[];
   dangerouslyForceUnsafeInstall?: boolean;
   mode?: "install" | "update";
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
+    approvedPluginPermissions: params.approvedPluginPermissions,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     dirPath: params.pluginDir,
     extensionsDir: params.extensionsDir,
@@ -1430,6 +1432,84 @@ describe("installPluginFromArchive", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("blocks declared dangerous permissions until the installer explicitly approves them", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "declared-dangerous-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["index.js"],
+          install: {
+            permissions: [
+              {
+                capability: "process.exec",
+                reason: "Launches the vendor desktop bridge during channel setup.",
+                commands: ["vendor-cli"],
+              },
+            ],
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      `const { spawn } = require("child_process");\nspawn("vendor-cli", ["status"]);`,
+    );
+
+    const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        "approve declared permissions with --approve-plugin-permission process.exec",
+      );
+    }
+  });
+
+  it("allows declared dangerous permissions after explicit approval", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "approved-dangerous-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["index.js"],
+          install: {
+            permissions: [{ capability: "process.exec", reason: "Runs the local app helper." }],
+          },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      `const { execFile } = require("child_process");\nexecFile("vendor-cli", ["status"]);`,
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      approvedPluginPermissions: ["process.exec"],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.approvedPermissions).toEqual(["process.exec"]);
+    }
+    expect(
+      warnings.some((warning) =>
+        warning.includes(
+          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {

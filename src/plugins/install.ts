@@ -16,6 +16,8 @@ import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
+  type PluginPackageInstallPermission,
+  type PluginPackageInstallPermissionCapability,
 } from "./manifest.js";
 
 let pluginInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
@@ -34,6 +36,8 @@ type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
+
+export type ApprovedPluginPermission = PluginPackageInstallPermissionCapability;
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
@@ -69,6 +73,7 @@ export type InstallPluginResult =
       manifestName?: string;
       version?: string;
       extensions: string[];
+      approvedPermissions?: ApprovedPluginPermission[];
       npmResolution?: NpmSpecResolution;
       integrityDrift?: NpmIntegrityDrift;
     }
@@ -203,12 +208,58 @@ function buildFileInstallResult(pluginId: string, targetFile: string): InstallPl
   };
 }
 
+function normalizeDeclaredInstallPermissions(
+  permissions: readonly PluginPackageInstallPermission[] | undefined,
+): ApprovedPluginPermission[] {
+  if (!Array.isArray(permissions)) {
+    return [];
+  }
+  const normalized: ApprovedPluginPermission[] = [];
+  for (const permission of permissions) {
+    const capability =
+      typeof permission === "string"
+        ? permission.trim()
+        : typeof permission?.capability === "string"
+          ? permission.capability.trim()
+          : "";
+    if (capability === "process.exec" && !normalized.includes(capability)) {
+      normalized.push(capability);
+    }
+  }
+  return normalized;
+}
+
+function normalizeApprovedPluginPermissions(
+  permissions: readonly string[] | undefined,
+): ApprovedPluginPermission[] {
+  if (!Array.isArray(permissions)) {
+    return [];
+  }
+  const normalized: ApprovedPluginPermission[] = [];
+  for (const permission of permissions) {
+    const capability = permission.trim();
+    if (capability === "process.exec" && !normalized.includes(capability)) {
+      normalized.push(capability);
+    }
+  }
+  return normalized;
+}
+
+function resolveApprovedDeclaredPluginPermissions(params: {
+  declaredPermissions: readonly ApprovedPluginPermission[];
+  approvedPermissions: readonly string[] | undefined;
+}): ApprovedPluginPermission[] {
+  const approved = normalizeApprovedPluginPermissions(params.approvedPermissions);
+  return approved.filter((permission) => params.declaredPermissions.includes(permission));
+}
+
 function buildDirectoryInstallResult(params: {
   pluginId: string;
   targetDir: string;
   manifestName?: string;
   version?: string;
   extensions: string[];
+  approvedPermissions?: ApprovedPluginPermission[];
 }): InstallPluginResult {
   return {
     ok: true,
@@ -217,6 +268,9 @@ function buildDirectoryInstallResult(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+    ...(params.approvedPermissions && params.approvedPermissions.length > 0
+      ? { approvedPermissions: params.approvedPermissions.slice() }
+      : {}),
   };
 }
 
@@ -247,6 +301,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
 type FileInstallCommonParams = Pick<
   PackageInstallCommonParams,
   | "dangerouslyForceUnsafeInstall"
+  | "approvedPluginPermissions"
   | "extensionsDir"
   | "logger"
   | "mode"
@@ -259,6 +314,7 @@ function pickPackageInstallCommonParams(
 ): PackageInstallCommonParams {
   return {
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    approvedPluginPermissions: params.approvedPluginPermissions,
     extensionsDir: params.extensionsDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
@@ -272,6 +328,7 @@ function pickPackageInstallCommonParams(
 function pickFileInstallCommonParams(params: FileInstallCommonParams): FileInstallCommonParams {
   return {
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    approvedPluginPermissions: params.approvedPluginPermissions,
     extensionsDir: params.extensionsDir,
     logger: params.logger,
     mode: params.mode,
@@ -351,6 +408,7 @@ async function installPluginDirectoryIntoExtensions(params: {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  approvedPermissions?: ApprovedPluginPermission[];
   targetDir?: string;
   extensionsDir?: string;
   logger: PluginInstallLogger;
@@ -396,6 +454,7 @@ async function installPluginDirectoryIntoExtensions(params: {
       manifestName: params.manifestName,
       version: params.version,
       extensions: params.extensions,
+      approvedPermissions: params.approvedPermissions,
     });
   }
 
@@ -435,6 +494,7 @@ async function installPluginDirectoryIntoExtensions(params: {
     manifestName: params.manifestName,
     version: params.version,
     extensions: params.extensions,
+    approvedPermissions: params.approvedPermissions,
   });
 }
 
@@ -729,6 +789,13 @@ async function installPluginFromPackageDir(
   }
 
   const packageMetadata = runtime.getPackageManifestMetadata(manifest);
+  const declaredPermissions = normalizeDeclaredInstallPermissions(
+    packageMetadata?.install?.permissions,
+  );
+  const approvedPermissions = resolveApprovedDeclaredPluginPermissions({
+    declaredPermissions,
+    approvedPermissions: params.approvedPluginPermissions,
+  });
   const minHostVersionCheck = runtime.checkMinHostVersion({
     currentVersion: runtime.resolveCompatibilityHostVersion(),
     minHostVersion: packageMetadata?.install?.minHostVersion,
@@ -775,6 +842,8 @@ async function installPluginFromPackageDir(
         pluginId,
         logger,
         extensions,
+        declaredPluginPermissions: declaredPermissions,
+        approvedPluginPermissions: approvedPermissions,
         requestKind: params.installPolicyRequest?.kind,
         requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
         mode: targetResult.target.effectiveMode,
@@ -795,6 +864,7 @@ async function installPluginFromPackageDir(
     manifestName: pkgName || undefined,
     version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
+    approvedPermissions,
     targetDir: targetResult.target.targetPath,
     extensionsDir: params.extensionsDir,
     logger,
@@ -876,6 +946,7 @@ export async function installPluginFromArchive(
         sourceDir,
         ...pickPackageInstallCommonParams({
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+          approvedPluginPermissions: params.approvedPluginPermissions,
           extensionsDir: params.extensionsDir,
           timeoutMs,
           logger,

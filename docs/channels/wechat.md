@@ -53,9 +53,16 @@ npx -y @tencent-weixin/openclaw-weixin-cli install
 Manual install:
 
 ```bash
-openclaw plugins install "@tencent-weixin/openclaw-weixin"
+openclaw plugins install "@tencent-weixin/openclaw-weixin" \
+  --approve-plugin-permission process.exec
 openclaw config set plugins.entries.openclaw-weixin.enabled true
 ```
+
+The WeChat plugin launches local helper processes, so plugin packages must
+declare the `process.exec` install permission in their OpenClaw extension
+metadata. The install command above records the operator approval with the
+install record. Packages that use process execution without declaring that
+permission remain blocked by the installer.
 
 Restart the Gateway after install:
 

@@ -310,31 +310,29 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   packageChannel?: OpenClawPackageManifest["channel"];
 }): Record<string, PluginManifestChannelConfig> | undefined {
   const channelId = params.packageChannel?.id?.trim();
-  if (
-    !channelId ||
-    isBlockedObjectKey(channelId) ||
-    !params.channelConfigs ||
-    !Object.prototype.hasOwnProperty.call(params.channelConfigs, channelId)
-  ) {
+  if (!channelId || isBlockedObjectKey(channelId)) {
     return params.channelConfigs;
   }
 
-  const existing = params.channelConfigs[channelId];
-  if (!existing) {
-    return params.channelConfigs;
+  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
+  for (const [key, value] of Object.entries(params.channelConfigs ?? {})) {
+    if (!isBlockedObjectKey(key)) {
+      merged[key] = value;
+    }
   }
+
+  const existing = merged[channelId] ?? {
+    schema: {
+      type: "object",
+      additionalProperties: true,
+    },
+  };
   const label = existing.label ?? normalizeOptionalString(params.packageChannel?.label) ?? "";
   const description =
     existing.description ?? normalizeOptionalString(params.packageChannel?.blurb) ?? "";
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
 
-  const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
-  for (const [key, value] of Object.entries(params.channelConfigs)) {
-    if (!isBlockedObjectKey(key)) {
-      merged[key] = value;
-    }
-  }
   merged[channelId] = {
     ...existing,
     ...(label ? { label } : {}),

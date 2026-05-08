@@ -117,7 +117,9 @@ locale picker lives in the Gateway Access card, not under Appearance.
   `openclaw_agent_consult` tool calls back through `chat.send` for the larger
   configured OpenClaw model.
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: built-in plus bundled/external plugin catalog, install, status, QR
+  login, and per-channel config (`channels.catalog`, `channels.install`,
+  `channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`)

@@ -1,4 +1,9 @@
-import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  buildChannelUiCatalog,
+  listChannelPluginCatalogEntries,
+  type ChannelPluginCatalogEntry,
+} from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   type ChannelId,
@@ -9,7 +14,12 @@ import {
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { loadConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { isCatalogChannelInstalled } from "../../commands/channel-setup/discovery.js";
+import {
+  installChannelSetupPluginFromCatalogEntry,
+  reloadChannelSetupPluginRegistryForChannel,
+} from "../../commands/channel-setup/plugin-install.js";
+import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
@@ -23,6 +33,8 @@ import {
   formatValidationErrors,
   validateChannelsStartParams,
   validateChannelsLogoutParams,
+  validateChannelsCatalogParams,
+  validateChannelsInstallParams,
   validateChannelsStatusParams,
 } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -41,6 +53,50 @@ type ChannelStartPayload = {
   accountId: string;
   started: boolean;
 };
+
+function resolveAllowedChannelIds(env: NodeJS.ProcessEnv = process.env): Set<string> | null {
+  const raw = env.OPENCLAW_CHANNEL_ALLOWLIST?.trim();
+  if (!raw) {
+    return null;
+  }
+  const ids = raw
+    .split(/[,\s;]+/u)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+function isAllowedChannelId(channelId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allowed = resolveAllowedChannelIds(env);
+  return !allowed || allowed.has(channelId.toLowerCase());
+}
+
+function filterAllowedChannelPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+  return plugins.filter((plugin) => isAllowedChannelId(plugin.id));
+}
+
+type ChannelCatalogPayloadEntry = {
+  id: string;
+  pluginId?: string;
+  label: string;
+  detailLabel: string;
+  systemImage?: string;
+  blurb?: string;
+  docsPath?: string;
+  installed: boolean;
+  configured: boolean;
+  install: {
+    npmSpec: string;
+    defaultChoice?: string;
+    minHostVersion?: string;
+    expectedIntegrity?: string;
+  };
+  installSource?: unknown;
+};
+
+function resolveChannelCatalogWorkspaceDir(cfg: OpenClawConfig): string | undefined {
+  return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+}
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
@@ -78,6 +134,71 @@ function resolveChannelGatewayAccountId(params: {
     params.plugin.config.listAccountIds(params.cfg)[0] ||
     DEFAULT_ACCOUNT_ID
   );
+}
+
+function readApprovedPluginPermissions(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = Array.from(
+    new Set(
+      value
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry === "process.exec"),
+    ),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function toCatalogPayloadEntry(params: {
+  entry: ChannelPluginCatalogEntry;
+  installed: boolean;
+  configured: boolean;
+}): ChannelCatalogPayloadEntry {
+  const install = params.entry.install;
+  const detailLabel =
+    params.entry.meta.detailLabel ?? params.entry.meta.selectionLabel ?? params.entry.meta.label;
+  return {
+    id: params.entry.id,
+    ...(params.entry.pluginId ? { pluginId: params.entry.pluginId } : {}),
+    label: params.entry.meta.label,
+    detailLabel,
+    ...(params.entry.meta.systemImage ? { systemImage: params.entry.meta.systemImage } : {}),
+    ...(params.entry.meta.blurb ? { blurb: params.entry.meta.blurb } : {}),
+    ...(params.entry.meta.docsPath ? { docsPath: params.entry.meta.docsPath } : {}),
+    installed: params.installed,
+    configured: params.configured,
+    install: {
+      npmSpec: install.npmSpec,
+      ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
+      ...(install.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
+      ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+    },
+    ...(params.entry.installSource ? { installSource: params.entry.installSource } : {}),
+  };
+}
+
+async function isCatalogChannelConfigured(params: {
+  cfg: OpenClawConfig;
+  plugins: readonly ChannelPlugin[];
+  channelId: string;
+}): Promise<boolean> {
+  const plugin = params.plugins.find((entry) => entry.id === params.channelId);
+  if (!plugin) {
+    return false;
+  }
+  const accountIds = plugin.config.listAccountIds(params.cfg);
+  for (const accountId of accountIds) {
+    const account = plugin.config.resolveAccount(params.cfg, accountId);
+    const configured = plugin.config.isConfigured
+      ? await plugin.config.isConfigured(account, params.cfg)
+      : true;
+    if (configured) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function logoutChannelAccount(params: {
@@ -139,6 +260,166 @@ export async function startChannelAccount(params: {
 }
 
 export const channelsHandlers: GatewayRequestHandlers = {
+  "channels.catalog": async ({ params, respond }) => {
+    if (!validateChannelsCatalogParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.catalog params: ${formatValidationErrors(validateChannelsCatalogParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    try {
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "config invalid; fix it before listing channels"),
+        );
+        return;
+      }
+      const cfg = applyPluginAutoEnable({
+        config: snapshot.sourceConfig ?? snapshot.config,
+        env: process.env,
+      }).config;
+      const plugins = filterAllowedChannelPlugins(listChannelPlugins());
+      const includeInstalled =
+        (params as { includeInstalled?: boolean }).includeInstalled !== false;
+      const includeInstallable =
+        (params as { includeInstallable?: boolean }).includeInstallable !== false;
+
+      const entries: ChannelCatalogPayloadEntry[] = [];
+      const workspaceDir = resolveChannelCatalogWorkspaceDir(cfg);
+      for (const entry of listChannelPluginCatalogEntries({ workspaceDir })) {
+        if (!isAllowedChannelId(entry.id)) {
+          continue;
+        }
+        const installed = isCatalogChannelInstalled({ cfg, entry, workspaceDir });
+        if ((installed && !includeInstalled) || (!installed && !includeInstallable)) {
+          continue;
+        }
+        const configured = await isCatalogChannelConfigured({
+          cfg,
+          plugins,
+          channelId: entry.id,
+        });
+        entries.push(toCatalogPayloadEntry({ entry, installed, configured }));
+      }
+
+      respond(true, { ts: Date.now(), entries }, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+    }
+  },
+  "channels.install": async ({ params, respond }) => {
+    if (!validateChannelsInstallParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid channels.install params: ${formatValidationErrors(validateChannelsInstallParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const channel = normalizeOptionalString((params as { channel?: unknown }).channel);
+    if (!channel) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid channel"));
+      return;
+    }
+
+    try {
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.valid) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "config invalid; fix it before installing channels",
+          ),
+        );
+        return;
+      }
+      const cfg = snapshot.sourceConfig ?? snapshot.config;
+      const workspaceDir = resolveChannelCatalogWorkspaceDir(cfg);
+      const entry = listChannelPluginCatalogEntries({ workspaceDir }).find(
+        (candidate) => candidate.id === channel && isAllowedChannelId(candidate.id),
+      );
+      if (!entry) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown installable channel: ${channel}`),
+        );
+        return;
+      }
+      if (isCatalogChannelInstalled({ cfg, entry, workspaceDir })) {
+        respond(
+          true,
+          {
+            channel: entry.id,
+            pluginId: entry.pluginId ?? entry.id,
+            installed: false,
+            alreadyInstalled: true,
+          },
+          undefined,
+        );
+        return;
+      }
+
+      const result = await installChannelSetupPluginFromCatalogEntry({
+        cfg,
+        entry,
+        runtime: defaultRuntime,
+        approvedPluginPermissions: readApprovedPluginPermissions(
+          (params as { approvedPluginPermissions?: unknown }).approvedPluginPermissions,
+        ),
+        timeoutMs: (params as { timeoutMs?: number }).timeoutMs,
+      });
+
+      if (!result.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));
+        return;
+      }
+
+      await replaceConfigFile({
+        nextConfig: result.cfg,
+        ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      });
+      reloadChannelSetupPluginRegistryForChannel({
+        cfg: result.cfg,
+        runtime: defaultRuntime,
+        channel: entry.id,
+        pluginId: result.pluginId,
+      });
+
+      respond(
+        true,
+        {
+          channel: entry.id,
+          pluginId: result.pluginId,
+          installed: result.installed,
+          alreadyInstalled: false,
+          ...(result.targetDir ? { targetDir: result.targetDir } : {}),
+          ...(result.version ? { version: result.version } : {}),
+          ...(result.approvedPermissions && result.approvedPermissions.length > 0
+            ? { approvedPermissions: result.approvedPermissions }
+            : {}),
+        },
+        undefined,
+      );
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+    }
+  },
   "channels.status": async ({ params, respond, context }) => {
     if (!validateChannelsStatusParams(params)) {
       respond(
@@ -159,7 +440,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       env: process.env,
     }).config;
     const runtime = context.getRuntimeSnapshot();
-    const plugins = listChannelPlugins();
+    const plugins = filterAllowedChannelPlugins(listChannelPlugins());
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
       plugins.map((plugin) => [plugin.id, plugin]),
     );

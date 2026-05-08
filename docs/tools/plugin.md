@@ -324,6 +324,38 @@ positives from the built-in dangerous-code scanner. It allows plugin installs
 and plugin updates to continue past built-in `critical` findings, but it still
 does not bypass plugin `before_install` policy blocks or scan-failure blocking.
 
+For plugins that intentionally need a sensitive install capability, prefer a
+manifest-declared permission plus explicit installer approval instead of the
+break-glass flag:
+
+```json
+{
+  "openclaw": {
+    "extensions": ["./dist/index.js"],
+    "install": {
+      "permissions": [
+        {
+          "capability": "process.exec",
+          "reason": "Launches the vendor desktop bridge during channel setup.",
+          "commands": ["vendor-cli"]
+        }
+      ]
+    }
+  }
+}
+```
+
+```bash
+openclaw plugins install @vendor/plugin --approve-plugin-permission process.exec
+openclaw plugins update @vendor/plugin --approve-plugin-permission process.exec
+```
+
+The package declaration and installer approval must both be present. Otherwise
+the built-in dangerous-code scanner continues to block `critical` findings.
+Approved permissions are persisted with the plugin install record. Updates reuse
+previously approved permissions; pass `--approve-plugin-permission` again only
+when a new version introduces an additional declared capability.
+
 This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub

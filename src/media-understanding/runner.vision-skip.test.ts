@@ -148,6 +148,45 @@ describe("runCapability image skip", () => {
     }
   });
 
+  it("skips image understanding from configured provider model capabilities without loading catalog", async () => {
+    const ctx: MsgContext = { MediaPath: "/tmp/image.png", MediaType: "image/png" };
+    const media = normalizeMediaAttachments(ctx);
+    const cache = createMediaAttachmentCache(media);
+    const cfg = {
+      models: {
+        providers: {
+          doxie: {
+            models: [{ id: "gpt-5.4", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    try {
+      const result = await runCapability({
+        capability: "image",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: buildProviderRegistry(),
+        activeModel: { provider: "doxie", model: "gpt-5.4" },
+      });
+
+      expect(result.outputs).toHaveLength(0);
+      expect(result.decision.outcome).toBe("skipped");
+      expect(result.decision.attachments[0]?.attempts[0]).toMatchObject({
+        provider: "doxie",
+        model: "gpt-5.4",
+        outcome: "skipped",
+        reason: "primary model supports vision natively",
+      });
+      expect(loadModelCatalog).not.toHaveBeenCalled();
+    } finally {
+      await cache.cleanup();
+    }
+  });
+
   it("uses explicit media image models instead of native vision skip", async () => {
     await withMediaFixture(
       {

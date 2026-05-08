@@ -353,6 +353,22 @@ export async function loadImageFromRef(
 ): Promise<ImageContent | null> {
   try {
     let targetPath = ref.resolved;
+    const isManagedMediaUri = ref.type === "media-uri" || targetPath.startsWith("media://inbound/");
+
+    // Gateway-managed media:// URIs are claim-check references inside
+    // OpenClaw's media store, not workspace-relative paths.
+    if (isManagedMediaUri) {
+      const media = await loadWebMedia(targetPath, { maxBytes: options?.maxBytes });
+      if (media.kind !== "image") {
+        log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
+        return null;
+      }
+      return {
+        type: "image",
+        data: media.buffer.toString("base64"),
+        mimeType: media.contentType ?? "image/jpeg",
+      };
+    }
 
     // Resolve paths relative to sandbox or workspace as needed
     if (options?.sandbox) {

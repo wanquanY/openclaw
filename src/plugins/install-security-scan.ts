@@ -55,6 +55,7 @@ export async function scanBundleInstallSource(
 
 export async function scanPackageInstallSource(
   params: InstallSafetyOverrides & {
+    declaredPluginPermissions?: readonly string[];
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;

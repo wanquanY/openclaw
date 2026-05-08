@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ComputerUseSessionConfig } from "../../computer-use/types.js";
 import {
@@ -338,10 +339,15 @@ function readComputerUseClientError(error: unknown): ComputerUseClientError | un
   };
 }
 
-function createImageContentBlock(
+async function createImageContentBlock(
   payload: GatewayComputerCapturePayload | undefined,
-): Extract<AgentToolResult<unknown>["content"][number], { type: "image" }> | undefined {
-  const base64 = normalizeOptionalString(payload?.base64Png);
+): Promise<Extract<AgentToolResult<unknown>["content"][number], { type: "image" }> | undefined> {
+  let base64 = normalizeOptionalString(payload?.base64Png);
+  const framePath = normalizeOptionalString(payload?.framePath);
+  if (!base64 && framePath) {
+    const bytes = await fs.readFile(framePath);
+    base64 = bytes.toString("base64");
+  }
   if (!base64) {
     return undefined;
   }
@@ -363,12 +369,12 @@ async function createComputerUseToolResult(params: {
   const content: AgentToolResult<ComputerUseStructuredPayload>["content"] = [
     { type: "text", text: params.summary },
   ];
-  const primaryImage = createImageContentBlock(params.primaryCapture);
+  const primaryImage = await createImageContentBlock(params.primaryCapture);
   if (primaryImage) {
     content.push({ type: "text", text: "Primary screen capture:" });
     content.push(primaryImage);
   }
-  const secondaryImage = createImageContentBlock(params.secondaryCapture);
+  const secondaryImage = await createImageContentBlock(params.secondaryCapture);
   if (secondaryImage) {
     content.push({ type: "text", text: "Post-action verification capture:" });
     content.push(secondaryImage);
@@ -744,14 +750,17 @@ function buildOcrRequestPayload(params: {
   capture?: GatewayComputerCapturePayload;
 }): Record<string, unknown> | undefined {
   const base64Png = normalizeOptionalString(params.capture?.base64Png);
+  const frameId = normalizeOptionalString(params.capture?.frameId);
+  const framePath = normalizeOptionalString(params.capture?.framePath);
+  const frameUrl = normalizeOptionalString(params.capture?.frameUrl);
   const target = buildResolvedObservationTarget(params);
   const observationId = normalizeOptionalString(target.observationId);
-  if (!base64Png && !observationId) {
+  if (!base64Png && !framePath && !frameUrl && !observationId) {
     return undefined;
   }
   return {
     ...target,
-    ...(observationId ? {} : { base64Png }),
+    ...(observationId ? {} : { base64Png, frameId, framePath, frameUrl }),
     ...(normalizeOptionalString(params.capture?.mimeType)
       ? { mimeType: normalizeOptionalString(params.capture?.mimeType) }
       : {}),
@@ -991,7 +1000,11 @@ export function createComputerUseTool(options: {
           scopeType: scope.type,
           targetKind: capturePayload.targetKind ?? undefined,
           appName: capturePayload.appName ?? undefined,
-          hasImage: Boolean(normalizeOptionalString(capturePayload.base64Png)),
+          hasImage: Boolean(
+            normalizeOptionalString(capturePayload.framePath) ??
+            normalizeOptionalString(capturePayload.frameUrl) ??
+            normalizeOptionalString(capturePayload.base64Png),
+          ),
           width: capturePayload.width,
           height: capturePayload.height,
           windowId: capturePayload.windowId ?? undefined,
@@ -1779,9 +1792,15 @@ export function createComputerUseTool(options: {
         targetKind: finalObservation?.targetKind ?? undefined,
         appName: finalObservation?.appName ?? undefined,
         hasPrimaryImage: Boolean(
+          normalizeOptionalString((capturePayload ?? afterCapturePayload)?.framePath) ??
+          normalizeOptionalString((capturePayload ?? afterCapturePayload)?.frameUrl) ??
           normalizeOptionalString((capturePayload ?? afterCapturePayload)?.base64Png),
         ),
-        hasVerificationImage: Boolean(normalizeOptionalString(afterCapturePayload?.base64Png)),
+        hasVerificationImage: Boolean(
+          normalizeOptionalString(afterCapturePayload?.framePath) ??
+          normalizeOptionalString(afterCapturePayload?.frameUrl) ??
+          normalizeOptionalString(afterCapturePayload?.base64Png),
+        ),
         hasAxSnapshot: Boolean(finalAxSnapshot),
         axNodeCount: finalAxSnapshot?.nodeCount ?? countAxNodes(finalAxSnapshot?.nodes),
         hasCdpSnapshot: Boolean(finalCdpSnapshot),

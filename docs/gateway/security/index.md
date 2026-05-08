@@ -504,6 +504,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - If you install or update plugins (`openclaw plugins install <package>`, `openclaw plugins update <id>`), treat it like running untrusted code:
   - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw runs a built-in dangerous-code scan before install/update. `critical` findings block by default.
+  - If a plugin intentionally needs a sensitive install capability such as `process.exec`, the package must declare it under `openclaw.install.permissions` and the installer must explicitly approve it with `--approve-plugin-permission process.exec`.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
   - `--dangerously-force-unsafe-install` is break-glass only for built-in scan false positives on plugin install/update flows. It does not bypass plugin `before_install` hook policy blocks and does not bypass scan failures.

@@ -57,6 +57,8 @@ export type PluginUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
+  approvePluginPermission?: string[];
+  approvedPluginPermissions?: string[];
 };
 
 export type PluginMarketplaceListOptions = {
@@ -739,6 +741,10 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option(
+      "--approve-plugin-permission <permission...>",
+      "Approve a permission declared by package.json openclaw.install.permissions (for example process.exec)",
+    )
+    .option(
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
@@ -747,13 +753,22 @@ export function registerPluginsCli(program: Command) {
         raw: string,
         opts: {
           dangerouslyForceUnsafeInstall?: boolean;
+          approvePluginPermission?: string[];
+          approvedPluginPermissions?: string[];
           force?: boolean;
           link?: boolean;
           pin?: boolean;
           marketplace?: string;
         },
       ) => {
-        await runPluginInstallCommand({ raw, opts });
+        await runPluginInstallCommand({
+          raw,
+          opts: {
+            ...opts,
+            approvedPluginPermissions:
+              opts.approvedPluginPermissions ?? opts.approvePluginPermission,
+          },
+        });
       },
     );
 
@@ -768,8 +783,18 @@ export function registerPluginsCli(program: Command) {
       "Bypass built-in dangerous-code update blocking for plugins (plugin hooks may still block)",
       false,
     )
+    .option(
+      "--approve-plugin-permission <permission...>",
+      "Approve a permission declared by package.json openclaw.install.permissions (for example process.exec)",
+    )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({
+        id,
+        opts: {
+          ...opts,
+          approvedPluginPermissions: opts.approvedPluginPermissions ?? opts.approvePluginPermission,
+        },
+      });
     });
 
   plugins

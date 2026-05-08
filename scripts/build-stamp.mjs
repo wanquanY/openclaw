@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveRunNodeBuildInputFingerprint } from "./run-node-build-inputs.mjs";
 
 export function resolveGitHead(params = {}) {
   const cwd = params.cwd ?? process.cwd();
@@ -34,9 +35,24 @@ export function writeBuildStamp(params = {}) {
     cwd,
     spawnSync: params.spawnSync,
   });
+  const inputFingerprint =
+    params.inputFingerprint === undefined
+      ? resolveRunNodeBuildInputFingerprint({
+          cwd,
+          fs: fsImpl,
+        })
+      : params.inputFingerprint;
 
   fsImpl.mkdirSync(distRoot, { recursive: true });
-  fsImpl.writeFileSync(buildStampPath, `${JSON.stringify({ builtAt: now(), head })}\n`, "utf8");
+  fsImpl.writeFileSync(
+    buildStampPath,
+    `${JSON.stringify({
+      builtAt: now(),
+      head,
+      ...(inputFingerprint ? { inputFingerprint } : {}),
+    })}\n`,
+    "utf8",
+  );
   return buildStampPath;
 }
 

@@ -46,6 +46,14 @@ import {
   ChannelsStartParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
+  type ChannelsCatalogParams,
+  ChannelsCatalogParamsSchema,
+  type ChannelsCatalogResult,
+  ChannelsCatalogResultSchema,
+  type ChannelsInstallParams,
+  ChannelsInstallParamsSchema,
+  type ChannelsInstallResult,
+  ChannelsInstallResultSchema,
   type TalkConfigParams,
   TalkConfigParamsSchema,
   type TalkConfigResult,
@@ -512,6 +520,18 @@ export const validateTalkSpeakParams = ajv.compile<TalkSpeakParams>(TalkSpeakPar
 export const validateTalkSpeakResult = ajv.compile<TalkSpeakResult>(TalkSpeakResultSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
+);
+export const validateChannelsCatalogParams = ajv.compile<ChannelsCatalogParams>(
+  ChannelsCatalogParamsSchema,
+);
+export const validateChannelsCatalogResult = ajv.compile<ChannelsCatalogResult>(
+  ChannelsCatalogResultSchema,
+);
+export const validateChannelsInstallParams = ajv.compile<ChannelsInstallParams>(
+  ChannelsInstallParamsSchema,
+);
+export const validateChannelsInstallResult = ajv.compile<ChannelsInstallResult>(
+  ChannelsInstallResultSchema,
 );
 export const validateChannelsStartParams =
   ajv.compile<ChannelsStartParams>(ChannelsStartParamsSchema);

@@ -116,6 +116,24 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
+const MATRIX_CRYPTO_PACKAGE = "@matrix-org/matrix-sdk-crypto-nodejs";
+const MATRIX_CRYPTO_NATIVE_ASSETS = Object.freeze({
+  darwin: {
+    x64: "matrix-sdk-crypto.darwin-x64.node",
+    arm64: "matrix-sdk-crypto.darwin-arm64.node",
+  },
+  linux: {
+    x64: "matrix-sdk-crypto.linux-x64-gnu.node",
+    arm64: "matrix-sdk-crypto.linux-arm64-gnu.node",
+    arm: "matrix-sdk-crypto.linux-arm-gnueabihf.node",
+    s390x: "matrix-sdk-crypto.linux-s390x-gnu.node",
+  },
+  win32: {
+    x64: "matrix-sdk-crypto.win32-x64-msvc.node",
+    ia32: "matrix-sdk-crypto.win32-ia32-msvc.node",
+    arm64: "matrix-sdk-crypto.win32-arm64-msvc.node",
+  },
+});
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -632,16 +650,155 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   }
 }
 
+function isMachO64Complete(filePath, readFile = readFileSync) {
+  const buffer = readFile(filePath);
+  if (buffer.length < 32 || buffer.readUInt32LE(0) !== 0xfeedfacf) {
+    return true;
+  }
+
+  const fileSize = buffer.length;
+  const ncmds = buffer.readUInt32LE(16);
+  const sizeofcmds = buffer.readUInt32LE(20);
+  const commandsStart = 32;
+  const commandsEnd = commandsStart + sizeofcmds;
+  if (commandsEnd > fileSize) return false;
+
+  let offset = commandsStart;
+  for (let index = 0; index < ncmds; index += 1) {
+    if (offset + 8 > commandsEnd) return false;
+    const command = buffer.readUInt32LE(offset);
+    const commandSize = buffer.readUInt32LE(offset + 4);
+    if (commandSize < 8 || offset + commandSize > commandsEnd) return false;
+
+    const rangeFits = (rangeOffset, rangeSize) =>
+      rangeSize === 0 || (rangeOffset <= fileSize && rangeOffset + rangeSize <= fileSize);
+
+    if (command === 0x19) {
+      if (commandSize < 72) return false;
+      if (
+        !rangeFits(
+          Number(buffer.readBigUInt64LE(offset + 40)),
+          Number(buffer.readBigUInt64LE(offset + 48)),
+        )
+      ) {
+        return false;
+      }
+    } else if (command === 0x1d) {
+      if (commandSize < 16) return false;
+      if (!rangeFits(buffer.readUInt32LE(offset + 8), buffer.readUInt32LE(offset + 12))) {
+        return false;
+      }
+    }
+
+    offset += commandSize;
+  }
+  return true;
+}
+
+function applyMatrixCryptoNativeBindingRepair(params = {}) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const platform = params.platform ?? process.platform;
+  const arch = params.arch ?? process.arch;
+  const assetName = MATRIX_CRYPTO_NATIVE_ASSETS[platform]?.[arch];
+  if (!assetName) return { applied: false, reason: "unsupported_platform" };
+
+  const packageDir = join(
+    packageRoot,
+    "dist",
+    "extensions",
+    "matrix",
+    "node_modules",
+    "@matrix-org",
+    "matrix-sdk-crypto-nodejs",
+  );
+  const packageJsonPath = join(packageDir, "package.json");
+  const nativePath = join(packageDir, assetName);
+  const pathExists = params.existsSync ?? existsSync;
+  const readFile = params.readFileSync ?? readFileSync;
+  if (!pathExists(packageJsonPath)) return { applied: false, reason: "missing_package" };
+  if (pathExists(nativePath) && isMachO64Complete(nativePath, readFile)) {
+    return { applied: false, reason: "already_valid" };
+  }
+
+  const version = (params.readJson ?? readJson)(packageJsonPath).version;
+  if (typeof version !== "string" || version.length === 0) {
+    return { applied: false, reason: "missing_version" };
+  }
+
+  const temporaryPath = `${nativePath}.download`;
+  const url = `https://github.com/matrix-org/matrix-rust-sdk-crypto-nodejs/releases/download/v${version}/${assetName}`;
+  try {
+    rmSync(temporaryPath, { force: true });
+    const result = spawnSync(
+      params.curlCommand ?? "curl",
+      [
+        "--fail",
+        "--location",
+        "--show-error",
+        "--silent",
+        "--http1.1",
+        "--retry",
+        "3",
+        "--retry-all-errors",
+        "--retry-delay",
+        "2",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "300",
+        "--output",
+        temporaryPath,
+        url,
+      ],
+      {
+        encoding: "utf8",
+        stdio: "pipe",
+      },
+    );
+    if (result.status !== 0) {
+      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      return {
+        applied: false,
+        reason: "download_failed",
+        error: output || `curl exited ${result.status}`,
+      };
+    }
+    if (!isMachO64Complete(temporaryPath, readFile)) {
+      return { applied: false, reason: "download_invalid" };
+    }
+    renameSync(temporaryPath, nativePath);
+    return { applied: true, reason: "repaired", targetPath: nativePath };
+  } catch (error) {
+    return {
+      applied: false,
+      reason: "error",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
 function applyBundledPluginRuntimeHotfixes(params = {}) {
   const log = params.log ?? console;
   const baileysResult = applyBaileysEncryptedStreamFinishHotfix(params);
   if (baileysResult.applied) {
     log.log("[postinstall] patched @whiskeysockets/baileys runtime hotfixes");
-    return;
-  }
-  if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
+  } else if (baileysResult.reason !== "missing" && baileysResult.reason !== "already_patched") {
     log.warn(
       `[postinstall] could not patch @whiskeysockets/baileys runtime hotfixes: ${baileysResult.reason}`,
+    );
+  }
+  const matrixCryptoResult = applyMatrixCryptoNativeBindingRepair(params);
+  if (matrixCryptoResult.applied) {
+    log.log(`[postinstall] repaired ${MATRIX_CRYPTO_PACKAGE} native binding`);
+  } else if (
+    matrixCryptoResult.reason !== "missing_package" &&
+    matrixCryptoResult.reason !== "already_valid" &&
+    matrixCryptoResult.reason !== "unsupported_platform"
+  ) {
+    log.warn(
+      `[postinstall] could not repair ${MATRIX_CRYPTO_PACKAGE} native binding: ${matrixCryptoResult.reason}`,
     );
   }
 }
